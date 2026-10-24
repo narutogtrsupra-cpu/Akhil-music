@@ -65,7 +65,6 @@ async def play_command(_, message):
     status = await message.reply_text(f"🔎 Searching for: {query}")
     try:
         audio_url, title, webpage_url = await asyncio.to_thread(find_audio, query)
-        await 
         
         calls.play(
     message.chat.id,
