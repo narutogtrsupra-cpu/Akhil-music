@@ -74,7 +74,7 @@ async def play_command(_, message):
     try:
         audio_url, title, webpage_url = await asyncio.to_thread(find_audio, query)
         
-        calls.play(
+        await calls.play(
     message.chat.id,
     MediaStream(audio_url, video_flags=MediaStream.Flags.IGNORE)
 )
