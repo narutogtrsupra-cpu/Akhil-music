@@ -92,8 +92,13 @@ async def main():
     await user.start()
     await calls.start()
     log.info("Music bot started")
-    # Keep the process alive while Pyrogram handles incoming messages.
-    await asyncio.Event().wait()
+
+    try:
+        await asyncio.Event().wait()
+    finally:
+        await calls.stop()
+        await user.stop()
+        await bot.stop()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    bot.run(main())
