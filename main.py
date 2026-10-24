@@ -45,7 +45,10 @@ YDL_OPTIONS = {
 
 def find_audio(query: str):
     with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
-        info = ydl.extract_info(query, download=False)
+        info = ydl.extract_info(
+    "scsearch1:" + query,
+    download=False
+)
         if "entries" in info:
             entries = info.get("entries") or []
             if not entries:
