@@ -36,6 +36,11 @@ YDL_OPTIONS = {
     "no_warnings": True,
     "noplaylist": True,
     "default_search": "ytsearch1",
+    "extractor_args": {
+        "youtube": {
+            "player_client": ["android_vr"]
+        }
+    }
 }
 
 def find_audio(query: str):
