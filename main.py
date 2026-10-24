@@ -4,7 +4,7 @@ import logging
 
 from pyrogram import Client, filters
 from pytgcalls import PyTgCalls
-from pytgcalls.types import AudioPiped
+from pytgcalls.types import MediaStream
 import yt_dlp
 
 logging.basicConfig(level=logging.INFO)
@@ -65,7 +65,10 @@ async def play_command(_, message):
     status = await message.reply_text(f"🔎 Searching for: {query}")
     try:
         audio_url, title, webpage_url = await asyncio.to_thread(find_audio, query)
-        await calls.play(message.chat.id, AudioPiped(audio_url))
+        await calls.play(
+    message.chat.id,
+    MediaStream(audio_url, video_flags=MediaStream.Flags.IGNORE)
+)
         await status.edit_text(f"🎶 Now playing: **{title}**")
     except Exception as exc:
         log.exception("Playback failed")
