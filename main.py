@@ -35,26 +35,54 @@ YDL_OPTIONS = {
     "quiet": True,
     "no_warnings": True,
     "noplaylist": True,
-    "default_search": "ytsearch1",
-    "extractor_args": {
-        "youtube": {
-            "player_client": ["android_vr"]
-        }
-    }
+    # Read search results as metadata first; then test each track separately.
+    "extract_flat": "in_playlist",
+    "ignoreerrors": True,
 }
 
+
 def find_audio(query: str):
+    """Return the first playable SoundCloud result, skipping DRM/unavailable tracks."""
     with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
-        info = ydl.extract_info(
-    "scsearch1:" + query,
-    download=False
-)
-        if "entries" in info:
-            entries = info.get("entries") or []
-            if not entries:
-                raise ValueError("No matching song was found.")
-            info = entries[0]
-        return info["url"], info.get("title", query), info.get("webpage_url", "")
+        try:
+            search = ydl.extract_info(f"scsearch5:{query}", download=False)
+        except Exception as exc:
+            raise ValueError(f"SoundCloud search failed: {exc}") from exc
+
+        entries = (search or {}).get("entries") or []
+        if not entries:
+            raise ValueError("No matching songs were found on SoundCloud.")
+
+        for entry in entries:
+            if not entry:
+                continue
+
+            candidate_url = entry.get("webpage_url") or entry.get("url")
+            if not candidate_url:
+                continue
+
+            try:
+                info = ydl.extract_info(candidate_url, download=False)
+                if not info or not info.get("url"):
+                    log.warning("Skipping unavailable result: %s", entry.get("title", candidate_url))
+                    continue
+
+                return (
+                    info["url"],
+                    info.get("title") or entry.get("title") or query,
+                    info.get("webpage_url") or candidate_url,
+                )
+            except Exception as exc:
+                log.warning(
+                    "Skipping unavailable/DRM-protected SoundCloud result %r: %s",
+                    entry.get("title") or candidate_url,
+                    exc,
+                )
+
+    raise ValueError(
+        "No playable SoundCloud result found. The search results may be DRM-protected "
+        "or unavailable. Try a different song title."
+    )
 
 @bot.on_message(filters.command("start"))
 async def start_command(_, message):
@@ -102,3 +130,4 @@ async def main():
 
 if __name__ == "__main__":
     bot.run(main())
+            
