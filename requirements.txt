@@ -1,6 +1,5 @@
 py-tgcalls[pyrogram]==3.0.0
 https://github.com/pyrogrammod/pyrogrammod/archive/main.zip
-yt-dlp[default]
 tgcrypto
 flask
-static-ffmpeg
+requests
