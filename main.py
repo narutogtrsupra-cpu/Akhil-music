@@ -49,32 +49,40 @@ calls = PyTgCalls(user)
 SONG_FILE = "current_song.mp3"
 
 def download_audio_track(query: str):
-    """Search a stable public index and download the MP3 file locally"""
+    """Fetch track from Jamendo and download MP3 locally with strict null safety"""
     try:
-        search_url = f"https://jiosaavn-api-private.vercel.app/search/songs?query={requests.utils.quote(query)}"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(search_url, headers=headers, timeout=10)
-        data = response.json()
+        client_id = "5c6a51d8"
+        search_url = f"https://api.jamendo.com/v3.0/tracks/?client_id={client_id}&format=json&limit=1&search={requests.utils.quote(query)}"
         
-        results = data.get("data", {}).get("results", [])
-        if not results:
+        response = requests.get(search_url, timeout=10)
+        try:
+            data = response.json()
+        except Exception:
+            raise ValueError("API did not return valid JSON.")
+            
+        if not data or not isinstance(data, dict):
+            raise ValueError("Empty API response.")
+            
+        results = data.get("results")
+        if not results or not isinstance(results, list):
             raise ValueError("No tracks found.")
             
-        song = results[0]
-        title = song.get("name", query)
+        track = results[0]
+        if not track or not isinstance(track, dict):
+            raise ValueError("Invalid track data.")
+            
+        title = track.get("name", query)
+        audio_url = track.get("audio")
         
-        # Get highest quality download link
-        download_urls = song.get("downloadUrl", [])
-        audio_url = None
-        if download_urls:
-            audio_url = download_urls[-1].get("link") or download_urls[-1].get("url")
-            
         if not audio_url:
-            raise ValueError("Direct audio link unavailable.")
+            raise ValueError("Direct download link missing.")
             
-        # Download the file locally so there are zero streaming errors
+        # Download locally to ensure zero streaming format errors
         log.info("Downloading track locally: %s", title)
-        audio_resp = requests.get(audio_url, headers=headers, timeout=20)
+        audio_resp = requests.get(audio_url, timeout=20)
+        if audio_resp.status_code != 200:
+            raise ValueError("Failed to download audio file.")
+            
         with open(SONG_FILE, "wb") as f:
             f.write(audio_resp.content)
             
@@ -86,8 +94,8 @@ def download_audio_track(query: str):
 @bot.on_message(filters.command("start"))
 async def start_command(_, message):
     await message.reply_text(
-        "🎵 Local Download Music Bot is online!\n"
-        "Use `/song [name]` to download and stream music without errors."
+        "🎵 Secure Local Music Bot is online!\n"
+        "Use `/song [name]` to download and stream music smoothly."
     )
 
 @bot.on_message(filters.command("song") & filters.group)
@@ -102,7 +110,7 @@ async def song_command(_, message):
     try:
         file_path, title = await asyncio.to_thread(download_audio_track, query)
         
-        # Play the local file directly into the voice chat
+        # Play local file directly into voice chat
         await calls.play(
             message.chat.id,
             MediaStream(file_path),
