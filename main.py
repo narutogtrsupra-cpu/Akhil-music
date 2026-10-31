@@ -47,26 +47,45 @@ user = Client("music_user", api_id=API_ID, api_hash=API_HASH, session_string=SES
 calls = PyTgCalls(user)
 
 def find_audio(query: str):
-    """Search using a direct, reliable public music lookup"""
+    """Search with robust safety checks to prevent NoneType crashes"""
     try:
-        # Using a stable public proxy search API
         search_url = f"https://jiosaavn-api-private.vercel.app/search/songs?query={requests.utils.quote(query)}"
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(search_url, headers=headers, timeout=10)
-        data = response.json()
         
-        results = data.get("data", {}).get("results", [])
+        try:
+            data = response.json()
+        except Exception:
+            raise ValueError("API returned invalid data format.")
+            
+        if not data or not isinstance(data, dict):
+            raise ValueError("Empty response from search API.")
+            
+        # Safely extract results
+        container = data.get("data")
+        results = []
+        if isinstance(container, dict):
+            results = container.get("results", [])
+        elif isinstance(container, list):
+            results = container
+            
         if not results:
             raise ValueError("No tracks found.")
             
         song = results[0]
-        title = song.get("name", query)
+        title = song.get("name") or song.get("title") or query
         
-        # Get download link (prefer highest 320kbps quality)
+        # Get download link
         download_urls = song.get("downloadUrl", [])
         audio_url = None
-        if download_urls:
-            audio_url = download_urls[-1].get("link") or download_urls[-1].get("url")
+        if isinstance(download_urls, list) and download_urls:
+            last_item = download_urls[-1]
+            if isinstance(last_item, dict):
+                audio_url = last_item.get("link") or last_item.get("url")
+        
+        # Fallback fields if downloadUrl is structured differently
+        if not audio_url:
+            audio_url = song.get("media_url") or song.get("encrypted_media_url")
             
         if not audio_url:
             raise ValueError("Direct audio stream unavailable.")
@@ -75,7 +94,7 @@ def find_audio(query: str):
         return audio_url, title
     except Exception as exc:
         log.error("Search failed: %s", exc)
-        raise ValueError("Could not fetch song. Try a different name.")
+        raise ValueError(f"Could not fetch song: {str(exc)[:100]}")
 
 @bot.on_message(filters.command("start"))
 async def start_command(_, message):
