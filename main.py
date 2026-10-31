@@ -46,8 +46,10 @@ bot = Client("music_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 user = Client("music_user", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
 calls = PyTgCalls(user)
 
-def find_audio(query: str):
-    """Directly fetch music using JioSaavn's official public API search endpoint"""
+SONG_FILE = "current_song.mp3"
+
+def fetch_and_download_audio(query: str):
+    """Search JioSaavn and download the mp3 locally to prevent streaming errors"""
     try:
         search_url = f"https://www.jiosaavn.com/api.php?__call=autocomplete.get&_format=json&_marker=0&cc=in&includeMetaTags=1&query={requests.utils.quote(query)}"
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -58,12 +60,10 @@ def find_audio(query: str):
         if not songs:
             raise ValueError("No songs found.")
             
-        # Get the song ID of the first match
         song = songs[0]
         song_id = song.get("id")
         title = song.get("title", query).replace("&quot;", "'").replace("&amp;", "&")
         
-        # Fetch direct media stream URL using the official song details endpoint
         details_url = f"https://www.jiosaavn.com/api.php?__call=song.getDetails&cc=in&_marker=0&_format=json&pids={song_id}"
         details_resp = requests.get(details_url, headers=headers, timeout=10)
         details_data = details_resp.json()
@@ -72,7 +72,6 @@ def find_audio(query: str):
         audio_url = song_info.get("media_url") or song_info.get("encrypted_media_url")
         
         if not audio_url:
-            # Fallback format mapping if needed
             media_url = song_info.get("media_preview_url", "")
             if media_url:
                 audio_url = media_url.replace("_96_p.mp4", "_320.mp4")
@@ -80,10 +79,15 @@ def find_audio(query: str):
         if not audio_url:
             raise ValueError("Could not extract audio stream link.")
             
-        log.info("Found stable track: %s", title)
-        return audio_url, title
+        # Download file locally
+        log.info("Downloading track: %s", title)
+        audio_resp = requests.get(audio_url, headers=headers, timeout=15)
+        with open(SONG_FILE, "wb") as f:
+            f.write(audio_resp.content)
+            
+        return SONG_FILE, title
     except Exception as exc:
-        log.error("JioSaavn search failed: %s", exc)
+        log.error("Download failed: %s", exc)
         raise ValueError("Could not fetch song. Try a different name.")
 
 @bot.on_message(filters.command("start"))
@@ -100,12 +104,12 @@ async def play_command(_, message):
         return
 
     query = " ".join(message.command[1:])
-    status = await message.reply_text(f"🔎 Searching: {query}")
+    status = await message.reply_text(f"🔎 Downloading: {query}")
     try:
-        audio_url, title = await asyncio.to_thread(find_audio, query)
+        file_path, title = await asyncio.to_thread(fetch_and_download_audio, query)
         await calls.play(
             message.chat.id,
-            MediaStream(audio_url, video_flags=MediaStream.Flags.IGNORE),
+            MediaStream(file_path),
         )
         await status.edit_text(f"🎶 Now playing: **{title}**")
     except Exception as exc:
