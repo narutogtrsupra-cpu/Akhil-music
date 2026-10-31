@@ -47,27 +47,31 @@ user = Client("music_user", api_id=API_ID, api_hash=API_HASH, session_string=SES
 calls = PyTgCalls(user)
 
 def find_audio(query: str):
-    """Fetch direct playable MP3 stream using Jamendo's public music library"""
+    """Search using a direct, reliable public music lookup"""
     try:
-        # Public Jamendo client ID for open music streaming
-        client_id = "5c6a51d8"
-        search_url = f"https://api.jamendo.com/v3.0/tracks/?client_id={client_id}&format=json&limit=1&search={requests.utils.quote(query)}"
-        
-        response = requests.get(search_url, timeout=10)
+        # Using a stable public proxy search API
+        search_url = f"https://jiosaavn-api-private.vercel.app/search/songs?query={requests.utils.quote(query)}"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(search_url, headers=headers, timeout=10)
         data = response.json()
         
-        results = data.get("results", [])
+        results = data.get("data", {}).get("results", [])
         if not results:
             raise ValueError("No tracks found.")
             
-        track = results[0]
-        title = track.get("name", query)
-        audio_url = track.get("audio") # Direct streamable mp3 link
+        song = results[0]
+        title = song.get("name", query)
         
-        if not audio_url:
-            raise ValueError("Direct audio link unavailable.")
+        # Get download link (prefer highest 320kbps quality)
+        download_urls = song.get("downloadUrl", [])
+        audio_url = None
+        if download_urls:
+            audio_url = download_urls[-1].get("link") or download_urls[-1].get("url")
             
-        log.info("Found Jamendo track: %s", title)
+        if not audio_url:
+            raise ValueError("Direct audio stream unavailable.")
+            
+        log.info("Found track successfully: %s", title)
         return audio_url, title
     except Exception as exc:
         log.error("Search failed: %s", exc)
@@ -77,7 +81,7 @@ def find_audio(query: str):
 async def start_command(_, message):
     await message.reply_text(
         "🎵 Music Bot is online!\n"
-        "Use `/play [song name]` to stream music smoothly without errors."
+        "Use `/play [song name]` to stream music smoothly."
     )
 
 @bot.on_message(filters.command("play") & filters.group)
@@ -87,7 +91,7 @@ async def play_command(_, message):
         return
 
     query = " ".join(message.command[1:])
-    status = await message.reply_text(f"🔎 Searching track: {query}")
+    status = await message.reply_text(f"🔎 Searching: {query}")
     try:
         audio_url, title = await asyncio.to_thread(find_audio, query)
         await calls.play(
