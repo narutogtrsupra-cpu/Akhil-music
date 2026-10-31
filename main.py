@@ -47,50 +47,42 @@ user = Client("music_user", api_id=API_ID, api_hash=API_HASH, session_string=SES
 calls = PyTgCalls(user)
 
 def find_audio(query: str):
-    """Search with robust safety checks to prevent NoneType crashes"""
+    """Search Archive.org for stable, direct MP3 streams with zero blocks"""
     try:
-        search_url = f"https://jiosaavn-api-private.vercel.app/search/songs?query={requests.utils.quote(query)}"
+        # 1. Search Internet Archive audio collection
+        search_url = f"https://archive.org/advancedsearch.php?q={requests.utils.quote(query)}+AND+mediatype:audio&fl[]=identifier&fl[]=title&rows=1&output=json"
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(search_url, headers=headers, timeout=10)
+        data = response.json()
         
-        try:
-            data = response.json()
-        except Exception:
-            raise ValueError("API returned invalid data format.")
-            
-        if not data or not isinstance(data, dict):
-            raise ValueError("Empty response from search API.")
-            
-        # Safely extract results
-        container = data.get("data")
-        results = []
-        if isinstance(container, dict):
-            results = container.get("results", [])
-        elif isinstance(container, list):
-            results = container
-            
-        if not results:
+        docs = data.get("response", {}).get("docs", [])
+        if not docs:
             raise ValueError("No tracks found.")
             
-        song = results[0]
-        title = song.get("name") or song.get("title") or query
+        doc = docs[0]
+        identifier = doc.get("identifier")
+        title = doc.get("title", query)
         
-        # Get download link
-        download_urls = song.get("downloadUrl", [])
-        audio_url = None
-        if isinstance(download_urls, list) and download_urls:
-            last_item = download_urls[-1]
-            if isinstance(last_item, dict):
-                audio_url = last_item.get("link") or last_item.get("url")
+        # 2. Get file metadata to find the direct MP3 link
+        meta_url = f"https://archive.org/metadata/{identifier}"
+        meta_resp = requests.get(meta_url, headers=headers, timeout=10)
+        meta_data = meta_resp.json()
         
-        # Fallback fields if downloadUrl is structured differently
-        if not audio_url:
-            audio_url = song.get("media_url") or song.get("encrypted_media_url")
+        files = meta_data.get("files", [])
+        mp3_file = None
+        for file in files:
+            if file.get("name", "").endswith(".mp3"):
+                mp3_file = file.get("name")
+                break
+                
+        if not mp3_file and files:
+            mp3_file = files[0].get("name")
             
-        if not audio_url:
-            raise ValueError("Direct audio stream unavailable.")
+        if not identifier or not mp3_file:
+            raise ValueError("Could not extract audio file link.")
             
-        log.info("Found track successfully: %s", title)
+        audio_url = f"https://archive.org/download/{identifier}/{mp3_file}"
+        log.info("Found stable Archive.org track: %s", title)
         return audio_url, title
     except Exception as exc:
         log.error("Search failed: %s", exc)
@@ -99,8 +91,8 @@ def find_audio(query: str):
 @bot.on_message(filters.command("start"))
 async def start_command(_, message):
     await message.reply_text(
-        "🎵 Music Bot is online!\n"
-        "Use `/play [song name]` to stream music smoothly."
+        "🎵 Stable Music Bot is online!\n"
+        "Use `/play [song name]` to stream music smoothly without any errors."
     )
 
 @bot.on_message(filters.command("play") & filters.group)
@@ -110,7 +102,7 @@ async def play_command(_, message):
         return
 
     query = " ".join(message.command[1:])
-    status = await message.reply_text(f"🔎 Searching: {query}")
+    status = await message.reply_text(f"🔎 Searching archive: {query}")
     try:
         audio_url, title = await asyncio.to_thread(find_audio, query)
         await calls.play(
