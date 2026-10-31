@@ -49,7 +49,6 @@ calls = PyTgCalls(user)
 def find_audio(query: str):
     """Search Archive.org for stable, direct MP3 streams with zero blocks"""
     try:
-        # 1. Search Internet Archive audio collection
         search_url = f"https://archive.org/advancedsearch.php?q={requests.utils.quote(query)}+AND+mediatype:audio&fl[]=identifier&fl[]=title&rows=1&output=json"
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(search_url, headers=headers, timeout=10)
@@ -63,7 +62,6 @@ def find_audio(query: str):
         identifier = doc.get("identifier")
         title = doc.get("title", query)
         
-        # 2. Get file metadata to find the direct MP3 link
         meta_url = f"https://archive.org/metadata/{identifier}"
         meta_resp = requests.get(meta_url, headers=headers, timeout=10)
         meta_data = meta_resp.json()
@@ -107,7 +105,10 @@ async def play_command(_, message):
         audio_url, title = await asyncio.to_thread(find_audio, query)
         await calls.play(
             message.chat.id,
-            MediaStream(audio_url),
+            MediaStream(
+                audio_url,
+                format=MediaStream.AudioFormats.opus,
+            ),
         )
         await status.edit_text(f"🎶 Now playing: **{title}**")
     except Exception as exc:
