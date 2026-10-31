@@ -1,6 +1,8 @@
 import os
 import asyncio
 import logging
+from threading import Thread
+from flask import Flask
 
 from pyrogram import Client, filters
 from pytgcalls import PyTgCalls
@@ -10,12 +12,31 @@ import yt_dlp
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("musicbot")
 
+# --- RENDER WEB SERVICE PORT BINDER (KEEP ALIVE) ---
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot is alive and running!"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    t = Thread(target=run_flask)
+    t.daemon = True
+    t.start()
+
+keep_alive()
+# --------------------------------------------------
+
 API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
 BOT_TOKEN = os.environ.get("BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_TOKEN") or os.environ.get("TOKEN")
 SESSION_STRING = os.environ["SESSION_STRING"]
 if not BOT_TOKEN:
-    raise RuntimeError("Set BOT_TOKEN (or TELEGRAM_BOT_TOKEN / TELEGRAM_TOKEN / TOKEN) in the host environment.")
+    raise RuntimeError("Set BOT_TOKEN in the host environment.")
 
 # --- COOKIES SETUP FOR RENDER ---
 cookies_content = os.getenv("COOKIES_TEXT")
@@ -33,8 +54,6 @@ bot = Client("music_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 user = Client("music_user", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
 calls = PyTgCalls(user)
 
-# Search metadata first, then extract each result individually. This lets us skip
-# tracks that are unavailable or DRM-protected and try the next source.
 SEARCH_OPTIONS = {
     "quiet": True,
     "no_warnings": True,
@@ -54,15 +73,11 @@ TRACK_OPTIONS = {
     "cookiefile": cookies_path if os.path.exists(cookies_path) else None,
 }
 
-
 def find_audio(query: str):
-    """Try YouTube search first, then SoundCloud; skip unplayable results."""
     sources = [
         ("YouTube", f"ytsearch5:{query}"),
         ("SoundCloud", f"scsearch5:{query}"),
     ]
-    failures = []
-
     for source_name, search_query in sources:
         log.info("Searching %s for: %s", source_name, query)
         try:
@@ -71,12 +86,9 @@ def find_audio(query: str):
             entries = (search_info or {}).get("entries") or []
         except Exception as exc:
             log.warning("%s search failed: %s", source_name, exc)
-            failures.append(f"{source_name} search failed")
             continue
 
         if not entries:
-            log.warning("No results from %s", source_name)
-            failures.append(f"no {source_name} results")
             continue
 
         for entry in entries:
@@ -85,28 +97,21 @@ def find_audio(query: str):
             candidate_url = entry.get("webpage_url") or entry.get("url")
             if not candidate_url:
                 continue
-            # Flat search entries can contain an ID instead of a full URL.
             if source_name == "YouTube" and not candidate_url.startswith(("http://", "https://")):
                 candidate_url = f"https://www.youtube.com/watch?v={candidate_url}"
             try:
                 with yt_dlp.YoutubeDL(TRACK_OPTIONS) as track_ydl:
                     info = track_ydl.extract_info(candidate_url, download=False)
                 if not info or not info.get("url"):
-                    log.warning("Skipping unplayable %s result: %s", source_name, entry.get("title", "unknown title"))
                     continue
                 title = info.get("title") or entry.get("title") or query
                 page_url = info.get("webpage_url") or candidate_url
                 log.info("Selected playable result from %s: %s", source_name, title)
                 return info["url"], title, page_url
             except Exception as exc:
-                # Do not log the resolved media URL; it can contain temporary tokens.
-                log.warning("Skipping unavailable/DRM-protected %s result %r: %s", source_name, entry.get("title", "unknown title"), exc)
+                log.warning("Skipping unavailable result: %s", exc)
 
-    raise ValueError(
-        "Could not find a playable result on YouTube or SoundCloud. "
-        "Try another song title, or check whether the host can reach these services."
-    )
-
+    raise ValueError("Could not find a playable result on YouTube or SoundCloud.")
 
 @bot.on_message(filters.command("start"))
 async def start_command(_, message):
@@ -115,7 +120,6 @@ async def start_command(_, message):
         "The linked user account must also be in the group and able to join voice chats."
     )
 
-
 @bot.on_message(filters.command("play") & filters.group)
 async def play_command(_, message):
     if len(message.command) < 2:
@@ -123,24 +127,17 @@ async def play_command(_, message):
         return
 
     query = " ".join(message.command[1:])
-    status = await message.reply_text(f"🔎 Searching YouTube and SoundCloud for: {query}")
+    status = await message.reply_text(f"🔎 Searching for: {query}")
     try:
         audio_url, title, webpage_url = await asyncio.to_thread(find_audio, query)
-        log.info("Starting playback for chat %s: %s", message.chat.id, title)
         await calls.play(
             message.chat.id,
             MediaStream(audio_url, video_flags=MediaStream.Flags.IGNORE),
         )
-        log.info("PyTgCalls play() returned for chat %s", message.chat.id)
         await status.edit_text(f"🎶 Now playing: **{title}**")
     except Exception as exc:
         log.exception("Playback failed")
-        await status.edit_text(
-            "Couldn't start playback. Confirm a voice chat is active, the linked user account "
-            "is in the group, and FFmpeg is available on the host. "
-            f"Error: `{str(exc)[:250]}`"
-        )
-
+        await status.edit_text(f"Couldn't start playback. Error: `{str(exc)[:250]}`")
 
 async def main():
     await bot.start()
@@ -153,7 +150,6 @@ async def main():
         await calls.stop()
         await user.stop()
         await bot.stop()
-
 
 if __name__ == "__main__":
     bot.run(main())
