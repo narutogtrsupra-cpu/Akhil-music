@@ -17,6 +17,18 @@ SESSION_STRING = os.environ["SESSION_STRING"]
 if not BOT_TOKEN:
     raise RuntimeError("Set BOT_TOKEN (or TELEGRAM_BOT_TOKEN / TELEGRAM_TOKEN / TOKEN) in the host environment.")
 
+# --- COOKIES SETUP FOR RENDER ---
+cookies_content = os.getenv("COOKIES_TEXT")
+cookies_path = "cookies.txt"
+
+if cookies_content:
+    with open(cookies_path, "w") as f:
+        f.write(cookies_content)
+    log.info("Cookies file successfully loaded from COOKIES_TEXT environment variable.")
+else:
+    log.warning("COOKIES_TEXT environment variable not found. YouTube might block requests if IP is flagged.")
+# --------------------------------
+
 bot = Client("music_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 user = Client("music_user", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
 calls = PyTgCalls(user)
@@ -30,6 +42,7 @@ SEARCH_OPTIONS = {
     "extract_flat": "in_playlist",
     "ignoreerrors": True,
     "noplaylist": True,
+    "cookiefile": cookies_path if os.path.exists(cookies_path) else None,
 }
 TRACK_OPTIONS = {
     "format": "bestaudio/best",
@@ -38,6 +51,7 @@ TRACK_OPTIONS = {
     "skip_download": True,
     "noplaylist": True,
     "ignoreerrors": True,
+    "cookiefile": cookies_path if os.path.exists(cookies_path) else None,
 }
 
 
