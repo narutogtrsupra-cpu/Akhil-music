@@ -4,8 +4,9 @@ import logging
 from threading import Thread
 from flask import Flask
 
-# Add local bin folder to PATH so pytgcalls/ffmpeg can find it on Render
-os.environ["PATH"] += os.pathsep + os.path.join(os.getcwd(), "bin")
+# Automatically download and configure static ffmpeg binaries for pytgcalls
+import static_ffmpeg
+static_ffmpeg.add_paths()
 
 from pyrogram import Client, filters
 from pytgcalls import PyTgCalls
@@ -141,4 +142,3 @@ async def main():
 
 if __name__ == "__main__":
     bot.run(main())
-                
