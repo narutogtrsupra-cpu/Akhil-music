@@ -12,6 +12,7 @@ static_ffmpeg.add_paths()
 from pyrogram import Client, filters
 from pytgcalls import PyTgCalls
 from pytgcalls.types import MediaStream
+import yt_dlp
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("musicbot")
@@ -46,48 +47,52 @@ bot = Client("music_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 user = Client("music_user", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
 calls = PyTgCalls(user)
 
-SONG_FILE = "current_song.mp3"
+SEARCH_OPTIONS = {
+    "quiet": True,
+    "no_warnings": True,
+    "skip_download": True,
+    "extract_flat": "in_playlist",
+    "ignoreerrors": True,
+    "noplaylist": True,
+}
 
-def fetch_and_download_audio(query: str):
-    """Search JioSaavn and download the mp3 locally to prevent streaming errors"""
+def find_audio(query: str):
+    """Search via yt-dlp and fetch a clean direct stream via Cobalt API"""
     try:
-        search_url = f"https://www.jiosaavn.com/api.php?__call=autocomplete.get&_format=json&_marker=0&cc=in&includeMetaTags=1&query={requests.utils.quote(query)}"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(search_url, headers=headers, timeout=10)
-        data = response.json()
+        # 1. Quick search for the video URL
+        with yt_dlp.YoutubeDL(SEARCH_OPTIONS) as ydl:
+            info = ydl.extract_info(f"ytsearch1:{query}", download=False)
+            entries = (info or {}).get("entries", [])
+            if not entries:
+                raise ValueError("No results found.")
+            entry = entries[0]
+            video_url = entry.get("webpage_url") or f"https://www.youtube.com/watch?v={entry.get('id')}"
+            title = entry.get("title", query)
+
+        # 2. Fetch direct stream link via Cobalt API proxy
+        cobalt_url = "https://api.cobalt.tools/api/json"
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0"
+        }
+        payload = {
+            "url": video_url,
+            "audioFormat": "mp3",
+            "isAudioOnly": True
+        }
         
-        songs = data.get("songs", {}).get("data", [])
-        if not songs:
-            raise ValueError("No songs found.")
-            
-        song = songs[0]
-        song_id = song.get("id")
-        title = song.get("title", query).replace("&quot;", "'").replace("&amp;", "&")
+        resp = requests.post(cobalt_url, json=payload, headers=headers, timeout=15)
+        data = resp.json()
         
-        details_url = f"https://www.jiosaavn.com/api.php?__call=song.getDetails&cc=in&_marker=0&_format=json&pids={song_id}"
-        details_resp = requests.get(details_url, headers=headers, timeout=10)
-        details_data = details_resp.json()
-        
-        song_info = details_data.get(song_id, {})
-        audio_url = song_info.get("media_url") or song_info.get("encrypted_media_url")
-        
+        audio_url = data.get("url") or data.get("picker", [{}])[0].get("url")
         if not audio_url:
-            media_url = song_info.get("media_preview_url", "")
-            if media_url:
-                audio_url = media_url.replace("_96_p.mp4", "_320.mp4")
-                
-        if not audio_url:
-            raise ValueError("Could not extract audio stream link.")
+            raise ValueError("Could not generate stream link.")
             
-        # Download file locally
-        log.info("Downloading track: %s", title)
-        audio_resp = requests.get(audio_url, headers=headers, timeout=15)
-        with open(SONG_FILE, "wb") as f:
-            f.write(audio_resp.content)
-            
-        return SONG_FILE, title
+        log.info("Successfully routed track via Cobalt: %s", title)
+        return audio_url, title
     except Exception as exc:
-        log.error("Download failed: %s", exc)
+        log.error("Playback fetch failed: %s", exc)
         raise ValueError("Could not fetch song. Try a different name.")
 
 @bot.on_message(filters.command("start"))
@@ -104,12 +109,12 @@ async def play_command(_, message):
         return
 
     query = " ".join(message.command[1:])
-    status = await message.reply_text(f"🔎 Downloading: {query}")
+    status = await message.reply_text(f"🔎 Fetching stream for: {query}")
     try:
-        file_path, title = await asyncio.to_thread(fetch_and_download_audio, query)
+        audio_url, title = await asyncio.to_thread(find_audio, query)
         await calls.play(
             message.chat.id,
-            MediaStream(file_path),
+            MediaStream(audio_url),
         )
         await status.edit_text(f"🎶 Now playing: **{title}**")
     except Exception as exc:
