@@ -46,74 +46,71 @@ bot = Client("music_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 user = Client("music_user", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
 calls = PyTgCalls(user)
 
-def find_audio(query: str):
-    """Search Archive.org for stable, direct MP3 streams with zero blocks"""
+SONG_FILE = "current_song.mp3"
+
+def download_audio_track(query: str):
+    """Search a stable public index and download the MP3 file locally"""
     try:
-        search_url = f"https://archive.org/advancedsearch.php?q={requests.utils.quote(query)}+AND+mediatype:audio&fl[]=identifier&fl[]=title&rows=1&output=json"
+        search_url = f"https://jiosaavn-api-private.vercel.app/search/songs?query={requests.utils.quote(query)}"
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(search_url, headers=headers, timeout=10)
         data = response.json()
         
-        docs = data.get("response", {}).get("docs", [])
-        if not docs:
+        results = data.get("data", {}).get("results", [])
+        if not results:
             raise ValueError("No tracks found.")
             
-        doc = docs[0]
-        identifier = doc.get("identifier")
-        title = doc.get("title", query)
+        song = results[0]
+        title = song.get("name", query)
         
-        meta_url = f"https://archive.org/metadata/{identifier}"
-        meta_resp = requests.get(meta_url, headers=headers, timeout=10)
-        meta_data = meta_resp.json()
-        
-        files = meta_data.get("files", [])
-        mp3_file = None
-        for file in files:
-            if file.get("name", "").endswith(".mp3"):
-                mp3_file = file.get("name")
-                break
-                
-        if not mp3_file and files:
-            mp3_file = files[0].get("name")
+        # Get highest quality download link
+        download_urls = song.get("downloadUrl", [])
+        audio_url = None
+        if download_urls:
+            audio_url = download_urls[-1].get("link") or download_urls[-1].get("url")
             
-        if not identifier or not mp3_file:
-            raise ValueError("Could not extract audio file link.")
+        if not audio_url:
+            raise ValueError("Direct audio link unavailable.")
             
-        audio_url = f"https://archive.org/download/{identifier}/{mp3_file}"
-        log.info("Found stable Archive.org track: %s", title)
-        return audio_url, title
+        # Download the file locally so there are zero streaming errors
+        log.info("Downloading track locally: %s", title)
+        audio_resp = requests.get(audio_url, headers=headers, timeout=20)
+        with open(SONG_FILE, "wb") as f:
+            f.write(audio_resp.content)
+            
+        return SONG_FILE, title
     except Exception as exc:
-        log.error("Search failed: %s", exc)
-        raise ValueError(f"Could not fetch song: {str(exc)[:100]}")
+        log.error("Download failed: %s", exc)
+        raise ValueError(f"Could not download song: {str(exc)[:100]}")
 
 @bot.on_message(filters.command("start"))
 async def start_command(_, message):
     await message.reply_text(
-        "🎵 Stable Music Bot is online!\n"
-        "Use `/play [song name]` to stream music smoothly without any errors."
+        "🎵 Local Download Music Bot is online!\n"
+        "Use `/song [name]` to download and stream music without errors."
     )
 
-@bot.on_message(filters.command("play") & filters.group)
-async def play_command(_, message):
+@bot.on_message(filters.command("song") & filters.group)
+async def song_command(_, message):
     if len(message.command) < 2:
-        await message.reply_text("Usage: `/play [song name]`")
+        await message.reply_text("Usage: `/song [song name]`")
         return
 
     query = " ".join(message.command[1:])
-    status = await message.reply_text(f"🔎 Searching archive: {query}")
+    status = await message.reply_text(f"📥 Downloading `{query}`...")
+    
     try:
-        audio_url, title = await asyncio.to_thread(find_audio, query)
+        file_path, title = await asyncio.to_thread(download_audio_track, query)
+        
+        # Play the local file directly into the voice chat
         await calls.play(
             message.chat.id,
-            MediaStream(
-                audio_url,
-                format=MediaStream.AudioFormats.opus,
-            ),
+            MediaStream(file_path),
         )
-        await status.edit_text(f"🎶 Now playing: **{title}**")
+        await status.edit_text(f"🎶 Now playing locally: **{title}**")
     except Exception as exc:
         log.exception("Playback failed")
-        await status.edit_text(f"Playback error: `{str(exc)[:200]}`")
+        await status.edit_text(f"Error: `{str(exc)[:200]}`")
 
 async def main():
     await bot.start()
