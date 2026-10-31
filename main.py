@@ -47,39 +47,50 @@ user = Client("music_user", api_id=API_ID, api_hash=API_HASH, session_string=SES
 calls = PyTgCalls(user)
 
 def find_audio(query: str):
-    """Fetch direct audio stream using a clean public music API (No YouTube/SoundCloud needed)"""
+    """Directly fetch music using JioSaavn's official public API search endpoint"""
     try:
-        url = f"https://saavn.dev/api/search/songs?query={query}"
-        response = requests.get(url, timeout=10)
+        search_url = f"https://www.jiosaavn.com/api.php?__call=autocomplete.get&_format=json&_marker=0&cc=in&includeMetaTags=1&query={requests.utils.quote(query)}"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(search_url, headers=headers, timeout=10)
         data = response.json()
         
-        if not data.get("success") or not data.get("data", {}).get("results"):
-            raise ValueError("No results found.")
+        songs = data.get("songs", {}).get("data", [])
+        if not songs:
+            raise ValueError("No songs found.")
             
-        song = data["data"]["results"][0]
-        title = song.get("name", query)
+        # Get the song ID of the first match
+        song = songs[0]
+        song_id = song.get("id")
+        title = song.get("title", query).replace("&quot;", "'").replace("&amp;", "&")
         
-        # Get the highest quality direct download link
-        download_urls = song.get("downloadUrl", [])
-        if not download_urls:
-            raise ValueError("Direct audio link not available for this track.")
-            
-        # Grab the last url in the list (usually highest bitrate 320kbps)
-        audio_url = download_urls[-1].get("url")
+        # Fetch direct media stream URL using the official song details endpoint
+        details_url = f"https://www.jiosaavn.com/api.php?__call=song.getDetails&cc=in&_marker=0&_format=json&pids={song_id}"
+        details_resp = requests.get(details_url, headers=headers, timeout=10)
+        details_data = details_resp.json()
+        
+        song_info = details_data.get(song_id, {})
+        audio_url = song_info.get("media_url") or song_info.get("encrypted_media_url")
+        
         if not audio_url:
-            raise ValueError("Invalid audio stream link.")
+            # Fallback format mapping if needed
+            media_url = song_info.get("media_preview_url", "")
+            if media_url:
+                audio_url = media_url.replace("_96_p.mp4", "_320.mp4")
+                
+        if not audio_url:
+            raise ValueError("Could not extract audio stream link.")
             
-        log.info("Found track: %s", title)
+        log.info("Found stable track: %s", title)
         return audio_url, title
     except Exception as exc:
-        log.error("API Search failed: %s", exc)
+        log.error("JioSaavn search failed: %s", exc)
         raise ValueError("Could not fetch song. Try a different name.")
 
 @bot.on_message(filters.command("start"))
 async def start_command(_, message):
     await message.reply_text(
-        "🎵 Clean Music Bot is online!\n"
-        "Use `/play [song name]` to stream music directly without YouTube/SoundCloud errors."
+        "🎵 Music Bot is online!\n"
+        "Use `/play [song name]` to stream music smoothly."
     )
 
 @bot.on_message(filters.command("play") & filters.group)
