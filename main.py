@@ -63,13 +63,14 @@ SEARCH_OPTIONS = {
     "noplaylist": True,
     "cookiefile": cookies_path if os.path.exists(cookies_path) else None,
 }
+
 TRACK_OPTIONS = {
-    "format": "bestaudio/best",
+    "format": "bestaudio/best/best",
+    "noplaylist": True,
+    "nocheckcertificate": True,
+    "ignoreerrors": True,
     "quiet": True,
     "no_warnings": True,
-    "skip_download": True,
-    "noplaylist": True,
-    "ignoreerrors": True,
     "cookiefile": cookies_path if os.path.exists(cookies_path) else None,
 }
 
