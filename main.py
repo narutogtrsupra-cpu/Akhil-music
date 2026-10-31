@@ -4,6 +4,9 @@ import logging
 from threading import Thread
 from flask import Flask
 
+# Add local bin folder to PATH so pytgcalls/ffmpeg can find it on Render
+os.environ["PATH"] += os.pathsep + os.path.join(os.getcwd(), "bin")
+
 from pyrogram import Client, filters
 from pytgcalls import PyTgCalls
 from pytgcalls.types import MediaStream
@@ -61,7 +64,6 @@ TRACK_OPTIONS = {
 }
 
 def find_audio(query: str):
-    # YouTube is completely removed. Using SoundCloud as the primary source.
     sources = [
         ("SoundCloud", f"scsearch5:{query}"),
     ]
@@ -139,4 +141,4 @@ async def main():
 
 if __name__ == "__main__":
     bot.run(main())
-    
+                
