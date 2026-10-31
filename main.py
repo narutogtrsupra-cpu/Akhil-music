@@ -38,18 +38,6 @@ SESSION_STRING = os.environ["SESSION_STRING"]
 if not BOT_TOKEN:
     raise RuntimeError("Set BOT_TOKEN in the host environment.")
 
-# --- COOKIES SETUP FOR RENDER ---
-cookies_content = os.getenv("COOKIES_TEXT")
-cookies_path = "cookies.txt"
-
-if cookies_content:
-    with open(cookies_path, "w") as f:
-        f.write(cookies_content)
-    log.info("Cookies file successfully loaded from COOKIES_TEXT environment variable.")
-else:
-    log.warning("COOKIES_TEXT environment variable not found. YouTube might block requests if IP is flagged.")
-# --------------------------------
-
 bot = Client("music_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 user = Client("music_user", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
 calls = PyTgCalls(user)
@@ -61,24 +49,23 @@ SEARCH_OPTIONS = {
     "extract_flat": "in_playlist",
     "ignoreerrors": True,
     "noplaylist": True,
-    "cookiefile": cookies_path if os.path.exists(cookies_path) else None,
 }
 
 TRACK_OPTIONS = {
-    "format": "bestaudio/best/best",
+    "format": "bestaudio/best",
     "noplaylist": True,
     "nocheckcertificate": True,
     "ignoreerrors": True,
     "quiet": True,
     "no_warnings": True,
-    "cookiefile": cookies_path if os.path.exists(cookies_path) else None,
 }
 
 def find_audio(query: str):
+    # YouTube is completely removed. Using SoundCloud as the primary source.
     sources = [
-        ("YouTube", f"ytsearch5:{query}"),
         ("SoundCloud", f"scsearch5:{query}"),
     ]
+    
     for source_name, search_query in sources:
         log.info("Searching %s for: %s", source_name, query)
         try:
@@ -98,8 +85,6 @@ def find_audio(query: str):
             candidate_url = entry.get("webpage_url") or entry.get("url")
             if not candidate_url:
                 continue
-            if source_name == "YouTube" and not candidate_url.startswith(("http://", "https://")):
-                candidate_url = f"https://www.youtube.com/watch?v={candidate_url}"
             try:
                 with yt_dlp.YoutubeDL(TRACK_OPTIONS) as track_ydl:
                     info = track_ydl.extract_info(candidate_url, download=False)
@@ -112,12 +97,12 @@ def find_audio(query: str):
             except Exception as exc:
                 log.warning("Skipping unavailable result: %s", exc)
 
-    raise ValueError("Could not find a playable result on YouTube or SoundCloud.")
+    raise ValueError("Could not find a playable result on SoundCloud.")
 
 @bot.on_message(filters.command("start"))
 async def start_command(_, message):
     await message.reply_text(
-        "🎵 Music bot is online. Add me to a group and use /play song name.\n"
+        "🎵 SoundCloud Music bot is online. Add me to a group and use /play song name.\n"
         "The linked user account must also be in the group and able to join voice chats."
     )
 
@@ -128,7 +113,7 @@ async def play_command(_, message):
         return
 
     query = " ".join(message.command[1:])
-    status = await message.reply_text(f"🔎 Searching for: {query}")
+    status = await message.reply_text(f"🔎 Searching SoundCloud for: {query}")
     try:
         audio_url, title, webpage_url = await asyncio.to_thread(find_audio, query)
         await calls.play(
@@ -154,3 +139,4 @@ async def main():
 
 if __name__ == "__main__":
     bot.run(main())
+    
