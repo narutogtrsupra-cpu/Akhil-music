@@ -1,17 +1,17 @@
 import os
 import asyncio
 import logging
+import requests
 from threading import Thread
 from flask import Flask
 
-# Automatically download and configure static ffmpeg binaries for pytgcalls
+# Automatically load static ffmpeg for pytgcalls
 import static_ffmpeg
 static_ffmpeg.add_paths()
 
 from pyrogram import Client, filters
 from pytgcalls import PyTgCalls
 from pytgcalls.types import MediaStream
-import yt_dlp
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("musicbot")
@@ -37,7 +37,7 @@ keep_alive()
 
 API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
-BOT_TOKEN = os.environ.get("BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_TOKEN") or os.environ.get("TOKEN")
+BOT_TOKEN = os.environ.get("BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN")
 SESSION_STRING = os.environ["SESSION_STRING"]
 if not BOT_TOKEN:
     raise RuntimeError("Set BOT_TOKEN in the host environment.")
@@ -46,79 +46,52 @@ bot = Client("music_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 user = Client("music_user", api_id=API_ID, api_hash=API_HASH, session_string=SESSION_STRING)
 calls = PyTgCalls(user)
 
-SEARCH_OPTIONS = {
-    "quiet": True,
-    "no_warnings": True,
-    "skip_download": True,
-    "extract_flat": "in_playlist",
-    "ignoreerrors": True,
-    "noplaylist": True,
-}
-
-TRACK_OPTIONS = {
-    "format": "bestaudio/best",
-    "noplaylist": True,
-    "nocheckcertificate": True,
-    "ignoreerrors": True,
-    "quiet": True,
-    "no_warnings": True,
-}
-
 def find_audio(query: str):
-    sources = [
-        ("SoundCloud", f"scsearch5:{query}"),
-    ]
-    
-    for source_name, search_query in sources:
-        log.info("Searching %s for: %s", source_name, query)
-        try:
-            with yt_dlp.YoutubeDL(SEARCH_OPTIONS) as search_ydl:
-                search_info = search_ydl.extract_info(search_query, download=False)
-            entries = (search_info or {}).get("entries") or []
-        except Exception as exc:
-            log.warning("%s search failed: %s", source_name, exc)
-            continue
-
-        if not entries:
-            continue
-
-        for entry in entries:
-            if not entry:
-                continue
-            candidate_url = entry.get("webpage_url") or entry.get("url")
-            if not candidate_url:
-                continue
-            try:
-                with yt_dlp.YoutubeDL(TRACK_OPTIONS) as track_ydl:
-                    info = track_ydl.extract_info(candidate_url, download=False)
-                if not info or not info.get("url"):
-                    continue
-                title = info.get("title") or entry.get("title") or query
-                page_url = info.get("webpage_url") or candidate_url
-                log.info("Selected playable result from %s: %s", source_name, title)
-                return info["url"], title, page_url
-            except Exception as exc:
-                log.warning("Skipping unavailable result: %s", exc)
-
-    raise ValueError("Could not find a playable result on SoundCloud.")
+    """Fetch direct audio stream using a clean public music API (No YouTube/SoundCloud needed)"""
+    try:
+        url = f"https://saavn.dev/api/search/songs?query={query}"
+        response = requests.get(url, timeout=10)
+        data = response.json()
+        
+        if not data.get("success") or not data.get("data", {}).get("results"):
+            raise ValueError("No results found.")
+            
+        song = data["data"]["results"][0]
+        title = song.get("name", query)
+        
+        # Get the highest quality direct download link
+        download_urls = song.get("downloadUrl", [])
+        if not download_urls:
+            raise ValueError("Direct audio link not available for this track.")
+            
+        # Grab the last url in the list (usually highest bitrate 320kbps)
+        audio_url = download_urls[-1].get("url")
+        if not audio_url:
+            raise ValueError("Invalid audio stream link.")
+            
+        log.info("Found track: %s", title)
+        return audio_url, title
+    except Exception as exc:
+        log.error("API Search failed: %s", exc)
+        raise ValueError("Could not fetch song. Try a different name.")
 
 @bot.on_message(filters.command("start"))
 async def start_command(_, message):
     await message.reply_text(
-        "🎵 SoundCloud Music bot is online. Add me to a group and use /play song name.\n"
-        "The linked user account must also be in the group and able to join voice chats."
+        "🎵 Clean Music Bot is online!\n"
+        "Use `/play [song name]` to stream music directly without YouTube/SoundCloud errors."
     )
 
 @bot.on_message(filters.command("play") & filters.group)
 async def play_command(_, message):
     if len(message.command) < 2:
-        await message.reply_text("Usage: /play song name")
+        await message.reply_text("Usage: `/play [song name]`")
         return
 
     query = " ".join(message.command[1:])
-    status = await message.reply_text(f"🔎 Searching SoundCloud for: {query}")
+    status = await message.reply_text(f"🔎 Searching: {query}")
     try:
-        audio_url, title, webpage_url = await asyncio.to_thread(find_audio, query)
+        audio_url, title = await asyncio.to_thread(find_audio, query)
         await calls.play(
             message.chat.id,
             MediaStream(audio_url, video_flags=MediaStream.Flags.IGNORE),
@@ -126,13 +99,13 @@ async def play_command(_, message):
         await status.edit_text(f"🎶 Now playing: **{title}**")
     except Exception as exc:
         log.exception("Playback failed")
-        await status.edit_text(f"Couldn't start playback. Error: `{str(exc)[:250]}`")
+        await status.edit_text(f"Playback error: `{str(exc)[:200]}`")
 
 async def main():
     await bot.start()
     await user.start()
     await calls.start()
-    log.info("Music bot started")
+    log.info("Music bot started successfully")
     try:
         await asyncio.Event().wait()
     finally:
