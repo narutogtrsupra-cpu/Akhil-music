@@ -3,3 +3,4 @@ https://github.com/pyrogrammod/pyrogrammod/archive/main.zip
 tgcrypto
 flask
 requests
+static-ffmpeg
