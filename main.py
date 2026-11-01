@@ -1,7 +1,6 @@
 import os
 import asyncio
 import logging
-import requests
 from threading import Thread
 from flask import Flask
 
@@ -12,6 +11,7 @@ static_ffmpeg.add_paths()
 from pyrogram import Client, filters
 from pytgcalls import PyTgCalls
 from pytgcalls.types import MediaStream
+import yt_dlp
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("musicbot")
@@ -49,49 +49,44 @@ calls = PyTgCalls(user)
 SONG_FILE = "current_song.mp3"
 
 def download_audio_track(query: str):
-    """Search Archive.org audio collection and download MP3 locally"""
+    """Use yt-dlp to download the track locally as an MP3 file"""
     try:
-        search_url = f"https://archive.org/advancedsearch.php?q={requests.utils.quote(query)}+AND+mediatype:audio&fl[]=identifier&fl[]=title&rows=5&output=json"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(search_url, headers=headers, timeout=10)
-        data = response.json()
-        
-        docs = data.get("response", {}).get("docs", [])
-        if not docs:
-            raise ValueError("No tracks found.")
-            
-        # Loop through search results to find one with an actual MP3 file
-        identifier, title, audio_url = None, None, None
-        for doc in docs:
-            iden = doc.get("identifier")
-            ttl = doc.get("title", query)
-            
-            meta_url = f"https://archive.org/metadata/{iden}"
-            meta_resp = requests.get(meta_url, headers=headers, timeout=10)
-            meta_data = meta_resp.json()
-            
-            files = meta_data.get("files", [])
-            for file in files:
-                if file.get("name", "").endswith(".mp3"):
-                    audio_url = f"https://archive.org/download/{iden}/{file.get('name')}"
-                    identifier = iden
-                    title = ttl
+        # Remove old song file if it exists
+        if os.path.exists(SONG_FILE):
+            os.remove(SONG_FILE)
+
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': 'current_song',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            'quiet': True,
+            'no_warnings': True,
+            'noplaylist': True,
+        }
+
+        search_query = f"ytsearch1:{query}"
+        log.info("Downloading local track via yt-dlp for: %s", query)
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(search_query, download=True)
+            if 'entries' in info:
+                info = info['entries'][0]
+            title = info.get('title', query)
+
+        if not os.path.exists(SONG_FILE):
+            # Check if it saved with a different extension before converting
+            for f in os.listdir('.'):
+                if f.startswith('current_song.'):
+                    os.rename(f, SONG_FILE)
                     break
-            if audio_url:
-                break
-                
-        if not audio_url:
-            raise ValueError("Direct audio file not found for this search.")
-            
-        # Download the file locally to guarantee zero playback errors
-        log.info("Downloading local track: %s", title)
-        audio_resp = requests.get(audio_url, headers=headers, timeout=20)
-        if audio_resp.status_code != 200:
-            raise ValueError("Failed to download audio stream.")
-            
-        with open(SONG_FILE, "wb") as f:
-            f.write(audio_resp.content)
-            
+
+        if not os.path.exists(SONG_FILE):
+            raise ValueError("Failed to save audio file locally.")
+
         return SONG_FILE, title
     except Exception as exc:
         log.error("Download failed: %s", exc)
@@ -100,7 +95,7 @@ def download_audio_track(query: str):
 @bot.on_message(filters.command("start"))
 async def start_command(_, message):
     await message.reply_text(
-        "🎵 Local Archive Music Bot is online!\n"
+        "🎵 Local yt-dlp Music Bot is online!\n"
         "Use `/song [name]` to download and stream music smoothly."
     )
 
