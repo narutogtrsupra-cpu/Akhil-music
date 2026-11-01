@@ -1,6 +1,7 @@
 import os
 import asyncio
 import logging
+import requests
 from threading import Thread
 from flask import Flask
 
@@ -11,7 +12,6 @@ static_ffmpeg.add_paths()
 from pyrogram import Client, filters
 from pytgcalls import PyTgCalls
 from pytgcalls.types import MediaStream
-import yt_dlp
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("musicbot")
@@ -49,77 +49,58 @@ calls = PyTgCalls(user)
 SONG_FILE = "current_song.mp3"
 
 def download_audio_track(query: str):
-    """Download track optimized for speed with multi-source fallback"""
+    """Fetch exact song match from public music API and download locally"""
     if os.path.exists(SONG_FILE):
         os.remove(SONG_FILE)
 
-    ydl_opts = {
-        'format': 'worstaudio/worst',
-        'outtmpl': 'current_song',
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '96',
-        }],
-        'quiet': True,
-        'no_warnings': True,
-        'noplaylist': True,
-    }
-
-    search_queries = [
-        f"scsearch1:{query}",
-        f"ytsearch1:{query}"
-    ]
-
-    last_error = None
-    title = query
-
-    for search_query in search_queries:
-        try:
-            log.info("Trying fast search query: %s", search_query)
-            current_opts = ydl_opts.copy()
-            if search_query.startswith("ytsearch1:"):
-                current_opts['extractor_args'] = {
-                    'youtube': {
-                        'player-client': ['android', 'web']
-                    }
-                }
-
-            with yt_dlp.YoutubeDL(current_opts) as ydl:
-                info = ydl.extract_info(search_query, download=True)
-                if 'entries' in info:
-                    info = info['entries'][0]
-                title = info.get('title', query)
-
-            if os.path.exists(SONG_FILE):
-                break
+    try:
+        # Public Saavn song search API endpoint
+        search_url = f"https://jiosaavn-api-private.vercel.app/search/songs?query={requests.utils.quote(query)}"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        
+        log.info("Querying music API for: %s", query)
+        response = requests.get(search_url, headers=headers, timeout=10)
+        data = response.json()
+        
+        results = data.get("data", {}).get("results", [])
+        if not results:
+            raise ValueError("No matching songs found via API.")
             
-            for f in os.listdir('.'):
-                if f.startswith('current_song.'):
-                    os.rename(f, SONG_FILE)
-                    break
-
-            if os.path.exists(SONG_FILE):
-                break
-        except Exception as exc:
-            last_error = exc
-            log.warning("Source %s failed: %s", search_query, exc)
-            continue
-
-    if not os.path.exists(SONG_FILE):
-        raise ValueError(f"Could not download song: {str(last_error or 'Unknown error')[:100]}")
-
-    return os.path.abspath(SONG_FILE), title
+        song = results[0]
+        title = song.get("name", query)
+        
+        # Get the highest available quality download link (.mp3)
+        download_urls = song.get("downloadUrl", [])
+        audio_url = None
+        if download_urls:
+            # Grabs the highest quality link from the array
+            audio_url = download_urls[-1].get("link") or download_urls[-1].get("url")
+            
+        if not audio_url:
+            raise ValueError("Direct audio stream link unavailable.")
+            
+        log.info("Downloading API track locally: %s", title)
+        audio_resp = requests.get(audio_url, headers=headers, timeout=30)
+        if audio_resp.status_code != 200:
+            raise ValueError("Failed to download audio file stream.")
+            
+        with open(SONG_FILE, "wb") as f:
+            f.write(audio_resp.content)
+            
+        return os.path.abspath(SONG_FILE), title
+    except Exception as exc:
+        log.error("API download failed: %s", exc)
+        raise ValueError(f"Could not download song: {str(exc)[:100]}")
 
 @bot.on_message(filters.command("start"))
 async def start_command(_, message):
     await message.reply_text(
-        "🎵 Control-Enabled Music Bot is online!\n\n"
+        "🎵 API Music Bot is online!\n\n"
         "**Commands:**\n"
-        "• `/song [name]` - Download & play song\n"
+        "• `/song [name]` - Search & play exact songs\n"
         "• `/pause` - Pause music\n"
         "• `/resume` - Resume music\n"
-        "• `/stop` or `/skip` - Stop playback & leave VC"
+        "• `/stop` or `/skip` - Stop & leave VC"
     )
 
 @bot.on_message(filters.command("song") & filters.group)
@@ -129,7 +110,7 @@ async def song_command(_, message):
         return
 
     query = " ".join(message.command[1:])
-    status = await message.reply_text(f"⚡ Fetching `{query}`...")
+    status = await message.reply_text(f"🔍 Searching API for `{query}`...")
     
     try:
         file_path, title = await asyncio.to_thread(download_audio_track, query)
