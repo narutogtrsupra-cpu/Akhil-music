@@ -12,6 +12,7 @@ static_ffmpeg.add_paths()
 from pyrogram import Client, filters
 from pytgcalls import PyTgCalls
 from pytgcalls.types import MediaStream
+from pytgcalls.types.update import Update
 import yt_dlp
 
 logging.basicConfig(level=logging.INFO)
@@ -108,7 +109,7 @@ def download_audio_track(query: str, index: int = 0):
 
     return os.path.abspath(song_file), title
 
-async def play_next(client, chat_id, message_context=None):
+async def play_next(chat_id, message_context=None):
     if chat_id in QUEUES and len(QUEUES[chat_id]) > 0:
         file_path, title = QUEUES[chat_id].pop(0)
         try:
@@ -120,7 +121,7 @@ async def play_next(client, chat_id, message_context=None):
                 await message_context.reply_text(f"🎶 Now playing: **{title}**")
         except Exception as exc:
             log.error(f"Playback error: {exc}")
-            await play_next(client, chat_id, message_context)
+            await play_next(chat_id, message_context)
     else:
         try:
             await calls.leave_group_call(chat_id)
@@ -128,10 +129,12 @@ async def play_next(client, chat_id, message_context=None):
             pass
         cleanup_memory()
 
-@calls.on_stream_end()
-async def stream_end_handler(client, update):
-    chat_id = update.chat_id
-    await play_next(client, chat_id)
+@calls.on_update()
+async def stream_end_handler(client, update: Update):
+    from pytgcalls.types import StreamAudioEnded
+    if isinstance(update, StreamAudioEnded):
+        chat_id = update.chat_id
+        await play_next(chat_id)
 
 @bot.on_message(filters.command("start"))
 async def start_command(_, message):
@@ -171,7 +174,7 @@ async def song_command(_, message):
 
         if not is_playing and len(QUEUES[message.chat.id]) == 0:
             QUEUES[message.chat.id].append((file_path, title))
-            await play_next(bot, message.chat.id, status)
+            await play_next(message.chat.id, status)
         else:
             QUEUES[message.chat.id].append((file_path, title))
             await status.edit_text(f"➕ Added to Queue: **{title}** (Position: {len(QUEUES[message.chat.id])})")
@@ -210,7 +213,7 @@ async def play_offline_command(_, message):
 
         if not is_playing and len(QUEUES[message.chat.id]) == 0:
             QUEUES[message.chat.id].append((abs_path, audio_name))
-            await play_next(bot, message.chat.id, status)
+            await play_next(message.chat.id, status)
         else:
             QUEUES[message.chat.id].append((abs_path, audio_name))
             await status.edit_text(f"➕ Added offline track to Queue: **{audio_name}** (Position: {len(QUEUES[message.chat.id])})")
@@ -251,7 +254,7 @@ async def resume_command(_, message):
 async def skip_command(_, message):
     try:
         await message.reply_text("⏭ Skipping current song...")
-        await play_next(bot, message.chat.id)
+        await play_next(message.chat.id)
     except Exception as exc:
         await message.reply_text(f"Error: {exc}")
 
