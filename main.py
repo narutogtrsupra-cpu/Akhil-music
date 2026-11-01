@@ -53,14 +53,13 @@ def download_audio_track(query: str):
     if os.path.exists(SONG_FILE):
         os.remove(SONG_FILE)
 
-    # Use a faster, smaller audio format target to speed up download and conversion
     ydl_opts = {
-        'format': 'worstaudio/worst',  
+        'format': 'worstaudio/worst',
         'outtmpl': 'current_song',
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
-            'preferredquality': '96',  # Lower quality = faster download and encoding
+            'preferredquality': '96',
         }],
         'quiet': True,
         'no_warnings': True,
@@ -115,8 +114,12 @@ def download_audio_track(query: str):
 @bot.on_message(filters.command("start"))
 async def start_command(_, message):
     await message.reply_text(
-        "🎵 Fast Music Bot is online!\n"
-        "Use `/song [name]` to stream music with reduced latency."
+        "🎵 Control-Enabled Music Bot is online!\n\n"
+        "**Commands:**\n"
+        "• `/song [name]` - Download & play song\n"
+        "• `/pause` - Pause music\n"
+        "• `/resume` - Resume music\n"
+        "• `/stop` or `/skip` - Stop playback & leave VC"
     )
 
 @bot.on_message(filters.command("song") & filters.group)
@@ -131,7 +134,6 @@ async def song_command(_, message):
     try:
         file_path, title = await asyncio.to_thread(download_audio_track, query)
         
-        # Stream the optimized local file instantly
         await calls.play(
             message.chat.id,
             MediaStream(file_path),
@@ -141,6 +143,30 @@ async def song_command(_, message):
         log.exception("Playback failed")
         if hasattr(status, 'edit_text'):
             await status.edit_text(f"Error: `{str(exc)[:200]}`")
+
+@bot.on_message(filters.command("pause") & filters.group)
+async def pause_command(_, message):
+    try:
+        await calls.pause(message.chat.id)
+        await message.reply_text("⏸ Paused the music.")
+    except Exception as exc:
+        await message.reply_text(f"Error: {exc}")
+
+@bot.on_message(filters.command("resume") & filters.group)
+async def resume_command(_, message):
+    try:
+        await calls.resume(message.chat.id)
+        await message.reply_text("▶️ Resumed the music.")
+    except Exception as exc:
+        await message.reply_text(f"Error: {exc}")
+
+@bot.on_message(filters.command(["stop", "skip", "next"]) & filters.group)
+async def stop_command(_, message):
+    try:
+        await calls.leave_group_call(message.chat.id)
+        await message.reply_text("⏹ Stopped playback and left the voice chat.")
+    except Exception as exc:
+        await message.reply_text(f"Error: {exc}")
 
 async def main():
     await bot.start()
