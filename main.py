@@ -49,24 +49,24 @@ calls = PyTgCalls(user)
 SONG_FILE = "current_song.mp3"
 
 def download_audio_track(query: str):
-    """Download track with automatic multi-source fallback to bypass DRM and blocks"""
+    """Download track optimized for speed with multi-source fallback"""
     if os.path.exists(SONG_FILE):
         os.remove(SONG_FILE)
 
+    # Use a faster, smaller audio format target to speed up download and conversion
     ydl_opts = {
-        'format': 'bestaudio/best',
+        'format': 'worstaudio/worst',  
         'outtmpl': 'current_song',
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
-            'preferredquality': '192',
+            'preferredquality': '96',  # Lower quality = faster download and encoding
         }],
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
     }
 
-    # List of sources to try in order (SoundCloud first, then YouTube fallback with client impersonation)
     search_queries = [
         f"scsearch1:{query}",
         f"ytsearch1:{query}"
@@ -77,8 +77,7 @@ def download_audio_track(query: str):
 
     for search_query in search_queries:
         try:
-            log.info("Trying search query: %s", search_query)
-            # If using YouTube fallback, apply client headers to avoid bot walls
+            log.info("Trying fast search query: %s", search_query)
             current_opts = ydl_opts.copy()
             if search_query.startswith("ytsearch1:"):
                 current_opts['extractor_args'] = {
@@ -96,7 +95,6 @@ def download_audio_track(query: str):
             if os.path.exists(SONG_FILE):
                 break
             
-            # Check for other extensions before conversion rename
             for f in os.listdir('.'):
                 if f.startswith('current_song.'):
                     os.rename(f, SONG_FILE)
@@ -112,13 +110,13 @@ def download_audio_track(query: str):
     if not os.path.exists(SONG_FILE):
         raise ValueError(f"Could not download song: {str(last_error or 'Unknown error')[:100]}")
 
-    return SONG_FILE, title
+    return os.path.abspath(SONG_FILE), title
 
 @bot.on_message(filters.command("start"))
 async def start_command(_, message):
     await message.reply_text(
-        "🎵 Robust Music Bot is online!\n"
-        "Use `/song [name]` to download and stream music smoothly."
+        "🎵 Fast Music Bot is online!\n"
+        "Use `/song [name]` to stream music with reduced latency."
     )
 
 @bot.on_message(filters.command("song") & filters.group)
@@ -128,20 +126,21 @@ async def song_command(_, message):
         return
 
     query = " ".join(message.command[1:])
-    status = await message.reply_text(f"📥 Downloading `{query}`...")
+    status = await message.reply_text(f"⚡ Fetching `{query}`...")
     
     try:
         file_path, title = await asyncio.to_thread(download_audio_track, query)
         
-        # Stream the local file directly into the voice chat
+        # Stream the optimized local file instantly
         await calls.play(
             message.chat.id,
             MediaStream(file_path),
         )
-        await status.edit_text(f"🎶 Now playing locally: **{title}**")
+        await status.edit_text(f"🎶 Now playing: **{title}**")
     except Exception as exc:
         log.exception("Playback failed")
-        await status.edit_text(f"Error: `{str(exc)[:200]}`")
+        if hasattr(status, 'edit_text'):
+            await status.edit_text(f"Error: `{str(exc)[:200]}`")
 
 async def main():
     await bot.start()
