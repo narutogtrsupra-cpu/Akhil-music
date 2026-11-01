@@ -1,6 +1,7 @@
 import os
 import asyncio
 import logging
+import requests
 from threading import Thread
 from flask import Flask
 
@@ -11,7 +12,6 @@ static_ffmpeg.add_paths()
 from pyrogram import Client, filters
 from pytgcalls import PyTgCalls
 from pytgcalls.types import MediaStream
-import yt_dlp
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("musicbot")
@@ -49,48 +49,54 @@ calls = PyTgCalls(user)
 SONG_FILE = "current_song.mp3"
 
 def download_audio_track(query: str):
-    """Download track locally using proxy extraction to completely bypass bot blocks"""
+    """Fetch track using public Invidious API and download MP3 locally without bot checks"""
     try:
         if os.path.exists(SONG_FILE):
             os.remove(SONG_FILE)
 
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'outtmpl': 'current_song',
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-            'quiet': True,
-            'no_warnings': True,
-            'noplaylist': True,
-            # Bypass YouTube bot checks using client impersonation
-            'extractor_args': {
-                'youtube': {
-                    'player-client': ['android', 'web']
-                }
-            }
-        }
-
-        search_query = f"ytsearch1:{query}"
-        log.info("Downloading local track via client bypass for: %s", query)
-
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(search_query, download=True)
-            if 'entries' in info:
-                info = info['entries'][0]
-            title = info.get('title', query)
-
-        if not os.path.exists(SONG_FILE):
-            for f in os.listdir('.'):
-                if f.startswith('current_song.'):
-                    os.rename(f, SONG_FILE)
-                    break
-
-        if not os.path.exists(SONG_FILE):
-            raise ValueError("Failed to save audio file locally.")
-
+        # Public Invidious instance search endpoint
+        search_url = f"https://invidious.perennialverse.net/api/v1/search?q={requests.utils.quote(query)}&type=video"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        
+        response = requests.get(search_url, headers=headers, timeout=10)
+        data = response.json()
+        
+        if not data or not isinstance(data, list):
+            raise ValueError("No tracks found.")
+            
+        video_id = data[0].get("videoId")
+        title = data[0].get("title", query)
+        
+        if not video_id:
+            raise ValueError("Could not find video ID.")
+            
+        # Get direct stream formats from Invidious
+        details_url = f"https://invidious.perennialverse.net/api/v1/videos/{video_id}"
+        details_resp = requests.get(details_url, headers=headers, timeout=10)
+        details_data = details_resp.json()
+        
+        adaptive_formats = details_data.get("adaptiveFormats", [])
+        audio_url = None
+        for fmt in adaptive_formats:
+            if "audio" in fmt.get("type", ""):
+                audio_url = fmt.get("url")
+                break
+                
+        if not audio_url:
+            # Fallback to standard formats
+            format_streams = details_data.get("formatStreams", [])
+            if format_streams:
+                audio_url = format_streams[0].get("url")
+                
+        if not audio_url:
+            raise ValueError("Direct audio stream unavailable.")
+            
+        # Download locally
+        log.info("Downloading track locally: %s", title)
+        audio_resp = requests.get(audio_url, headers=headers, timeout=20)
+        with open(SONG_FILE, "wb") as f:
+            f.write(audio_resp.content)
+            
         return SONG_FILE, title
     except Exception as exc:
         log.error("Download failed: %s", exc)
@@ -99,7 +105,7 @@ def download_audio_track(query: str):
 @bot.on_message(filters.command("start"))
 async def start_command(_, message):
     await message.reply_text(
-        "🎵 Secure Music Bot is online!\n"
+        "🎵 Invidious Music Bot is online!\n"
         "Use `/song [name]` to download and stream music smoothly."
     )
 
