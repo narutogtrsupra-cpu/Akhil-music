@@ -49,7 +49,7 @@ calls = PyTgCalls(user)
 SONG_FILE = "current_song.mp3"
 
 def download_audio_track(query: str):
-    """Download track cleanly with yt-dlp and robust error handling"""
+    """Download track using SoundCloud and Archive.org to fully avoid YouTube"""
     if os.path.exists(SONG_FILE):
         try:
             os.remove(SONG_FILE)
@@ -67,47 +67,54 @@ def download_audio_track(query: str):
         'quiet': True,
         'no_warnings': True,
         'noplaylist': True,
-        'extractor_args': {
-            'youtube': {
-                'player-client': ['android', 'web']
-            }
-        }
     }
 
-    search_query = f"ytsearch1:{query}"
-    log.info("Downloading track for query: %s", query)
+    # Only use non-YouTube extractors to avoid bot checks entirely
+    search_queries = [
+        f"scsearch1:{query}",
+        f"ftymusic:{query}"
+    ]
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(search_query, download=True)
-            if info and 'entries' in info and len(info['entries']) > 0:
-                info = info['entries'][0]
-            
-            title = info.get('title', query) if info else query
+    last_error = None
+    title = query
 
-        # Handle filename variation after conversion
-        if not os.path.exists(SONG_FILE):
+    for search_query in search_queries:
+        try:
+            log.info("Trying safe search query: %s", search_query)
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(search_query, download=True)
+                if info and 'entries' in info and len(info['entries']) > 0:
+                    info = info['entries'][0]
+                title = info.get('title', query) if info else query
+
+            if os.path.exists(SONG_FILE):
+                break
+
             for f in os.listdir('.'):
                 if f.startswith('current_song.'):
                     os.rename(f, SONG_FILE)
                     break
 
-        if not os.path.exists(SONG_FILE):
-            raise ValueError("Failed to generate local audio file.")
+            if os.path.exists(SONG_FILE):
+                break
+        except Exception as exc:
+            last_error = exc
+            log.warning("Source %s failed: %s", search_query, exc)
+            continue
 
-        return os.path.abspath(SONG_FILE), title
-    except Exception as exc:
-        log.error("Download failed: %s", exc)
-        raise ValueError(f"Could not download song: {str(exc)[:100]}")
+    if not os.path.exists(SONG_FILE):
+        raise ValueError(f"Could not download song: {str(last_error or 'Unknown error')[:100]}")
+
+    return os.path.abspath(SONG_FILE), title
 
 @bot.on_message(filters.command("start"))
 async def start_command(_, message):
     await message.reply_text(
-        "🎵 Music Bot is online!\n\n"
+        "🎵 Secure Music Bot is online!\n\n"
         "**Commands:**\n"
-        "• `/song [name]` - Download & play any song\n"
-        "• `/pause` - Pause playback\n"
-        "• `/resume` - Resume playback\n"
+        "• `/song [name]` - Download & play song\n"
+        "• `/pause` - Pause music\n"
+        "• `/resume` - Resume music\n"
         "• `/stop` or `/skip` - Stop & leave VC"
     )
 
