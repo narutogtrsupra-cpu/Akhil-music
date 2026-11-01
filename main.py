@@ -1,6 +1,7 @@
 import os
 import asyncio
 import logging
+import gc
 from threading import Thread
 from flask import Flask
 
@@ -36,6 +37,9 @@ keep_alive()
 # --------------------------------------------------
 
 API_ID = int(os.environ["API_ID"])
+API_HASH = int(os.environ["API_HASH"]) if os.environ["API_HASH"].isdigit() else os.environ["API_HASH"] # handled safely
+# Ensuring proper type parsing for API_ID
+API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
 BOT_TOKEN = os.environ.get("BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN")
 SESSION_STRING = os.environ["SESSION_STRING"]
@@ -48,13 +52,19 @@ calls = PyTgCalls(user)
 
 SONG_FILE = "current_song.mp3"
 
-def download_audio_track(query: str):
-    """Download track using SoundCloud and safe extractors"""
+def cleanup_memory():
+    """Free up RAM and delete temp files to prevent Render crashes"""
     if os.path.exists(SONG_FILE):
         try:
             os.remove(SONG_FILE)
         except Exception:
             pass
+    # Force garbage collection to free RAM from ffmpeg/yt-dlp buffers
+    gc.collect()
+
+def download_audio_track(query: str):
+    """Download track safely with memory management"""
+    cleanup_memory()
 
     ydl_opts = {
         'format': 'bestaudio/best',
@@ -62,7 +72,7 @@ def download_audio_track(query: str):
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
-            'preferredquality': '192',
+            'preferredquality': '128', # Balanced quality to save RAM
         }],
         'quiet': True,
         'no_warnings': True,
@@ -109,7 +119,7 @@ def download_audio_track(query: str):
 @bot.on_message(filters.command("start"))
 async def start_command(_, message):
     await message.reply_text(
-        "🎵 Hybrid Music Bot is online!\n\n"
+        "🎵 Optimized Hybrid Music Bot is online!\n\n"
         "**Online Commands:**\n"
         "• `/song [name]` - Search & play online song\n\n"
         "**Offline / Direct Play Commands:**\n"
@@ -154,11 +164,7 @@ async def play_offline_command(_, message):
     status = await message.reply_text("📥 Loading offline song...")
     
     try:
-        if os.path.exists(SONG_FILE):
-            try:
-                os.remove(SONG_FILE)
-            except Exception:
-                pass
+        cleanup_memory()
 
         file_path = await message.reply_to_message.download(file_name=SONG_FILE)
         abs_path = os.path.abspath(file_path)
@@ -194,7 +200,8 @@ async def resume_command(_, message):
 async def stop_command(_, message):
     try:
         await calls.leave_group_call(message.chat.id)
-        await message.reply_text("⏹ Stopped playback and left the voice chat.")
+        cleanup_memory()
+        await message.reply_text("⏹ Stopped playback, cleared RAM cache, and left the voice chat.")
     except Exception as exc:
         await message.reply_text(f"Error: {exc}")
 
