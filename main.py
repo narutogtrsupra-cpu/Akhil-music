@@ -49,39 +49,45 @@ calls = PyTgCalls(user)
 SONG_FILE = "current_song.mp3"
 
 def download_audio_track(query: str):
-    """Fetch track from Jamendo and download MP3 locally with strict null safety"""
+    """Search Archive.org audio collection and download MP3 locally"""
     try:
-        client_id = "5c6a51d8"
-        search_url = f"https://api.jamendo.com/v3.0/tracks/?client_id={client_id}&format=json&limit=1&search={requests.utils.quote(query)}"
+        search_url = f"https://archive.org/advancedsearch.php?q={requests.utils.quote(query)}+AND+mediatype:audio&fl[]=identifier&fl[]=title&rows=5&output=json"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(search_url, headers=headers, timeout=10)
+        data = response.json()
         
-        response = requests.get(search_url, timeout=10)
-        try:
-            data = response.json()
-        except Exception:
-            raise ValueError("API did not return valid JSON.")
-            
-        if not data or not isinstance(data, dict):
-            raise ValueError("Empty API response.")
-            
-        results = data.get("results")
-        if not results or not isinstance(results, list):
+        docs = data.get("response", {}).get("docs", [])
+        if not docs:
             raise ValueError("No tracks found.")
             
-        track = results[0]
-        if not track or not isinstance(track, dict):
-            raise ValueError("Invalid track data.")
+        # Loop through search results to find one with an actual MP3 file
+        identifier, title, audio_url = None, None, None
+        for doc in docs:
+            iden = doc.get("identifier")
+            ttl = doc.get("title", query)
             
-        title = track.get("name", query)
-        audio_url = track.get("audio")
-        
+            meta_url = f"https://archive.org/metadata/{iden}"
+            meta_resp = requests.get(meta_url, headers=headers, timeout=10)
+            meta_data = meta_resp.json()
+            
+            files = meta_data.get("files", [])
+            for file in files:
+                if file.get("name", "").endswith(".mp3"):
+                    audio_url = f"https://archive.org/download/{iden}/{file.get('name')}"
+                    identifier = iden
+                    title = ttl
+                    break
+            if audio_url:
+                break
+                
         if not audio_url:
-            raise ValueError("Direct download link missing.")
+            raise ValueError("Direct audio file not found for this search.")
             
-        # Download locally to ensure zero streaming format errors
-        log.info("Downloading track locally: %s", title)
-        audio_resp = requests.get(audio_url, timeout=20)
+        # Download the file locally to guarantee zero playback errors
+        log.info("Downloading local track: %s", title)
+        audio_resp = requests.get(audio_url, headers=headers, timeout=20)
         if audio_resp.status_code != 200:
-            raise ValueError("Failed to download audio file.")
+            raise ValueError("Failed to download audio stream.")
             
         with open(SONG_FILE, "wb") as f:
             f.write(audio_resp.content)
@@ -94,7 +100,7 @@ def download_audio_track(query: str):
 @bot.on_message(filters.command("start"))
 async def start_command(_, message):
     await message.reply_text(
-        "🎵 Secure Local Music Bot is online!\n"
+        "🎵 Local Archive Music Bot is online!\n"
         "Use `/song [name]` to download and stream music smoothly."
     )
 
@@ -110,7 +116,7 @@ async def song_command(_, message):
     try:
         file_path, title = await asyncio.to_thread(download_audio_track, query)
         
-        # Play local file directly into voice chat
+        # Stream the local file directly into the voice chat
         await calls.play(
             message.chat.id,
             MediaStream(file_path),
