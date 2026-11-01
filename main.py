@@ -15,7 +15,6 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pytgcalls import PyTgCalls
 from pytgcalls.types import MediaStream
 from pytgcalls.types.update import Update
-from pytgcalls.types import StreamAudioEnded
 import yt_dlp
 
 logging.basicConfig(level=logging.INFO)
@@ -115,11 +114,11 @@ def download_audio_track(query: str, index: int = 0):
 
     return os.path.abspath(song_file), title, duration_str, thumb_path
 
-def get_control_markup(is_paused=False):
+def get_control_markup():
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("⏮", callback_data="cb_skip"),
-            InlineKeyboardButton("⏸" if not is_paused else "▶️", callback_data="cb_pause_resume"),
+            InlineKeyboardButton("⏸", callback_data="cb_pause_resume"),
             InlineKeyboardButton("⏹", callback_data="cb_stop"),
             InlineKeyboardButton("⏭", callback_data="cb_skip")
         ],
@@ -148,10 +147,6 @@ async def play_next(chat_id):
     if chat_id in QUEUES and len(QUEUES[chat_id]) > 0:
         current = QUEUES[chat_id][0]
         
-        # Handle loop mode: push to end of list if loop enabled
-        if LOOP_MODES.get(chat_id, False):
-            QUEUES[chat_id].append(current)
-
         try:
             vol = VOLUMES.get(chat_id, 100)
             await calls.play(
@@ -196,17 +191,16 @@ async def play_next(chat_id):
 
 @calls.on_update()
 async def stream_end_handler(client, update: Update):
-    if isinstance(update, StreamAudioEnded):
-        chat_id = update.chat_id
-        if chat_id in QUEUES and len(QUEUES[chat_id]) > 0:
-            # If loop is not enabled, pop the finished song
+    update_str = str(type(update))
+    if "Ended" in update_str or "Finished" in update_str or "Update" in update_str:
+        chat_id = getattr(update, "chat_id", None)
+        if chat_id and chat_id in QUEUES and len(QUEUES[chat_id]) > 0:
             if not LOOP_MODES.get(chat_id, False):
                 QUEUES[chat_id].pop(0)
             else:
-                # If loop is enabled, pop and push to back handled in play_next, so just rotate here
                 item = QUEUES[chat_id].pop(0)
                 QUEUES[chat_id].append(item)
-        await play_next(chat_id)
+            await play_next(chat_id)
 
 @bot.on_message(filters.command("start"))
 async def start_command(_, message):
@@ -388,7 +382,7 @@ async def callback_handler(_, callback_query):
     elif data == "cb_pause_resume":
         try:
             await calls.pause(chat_id)
-            await callback_query.answer("Paused!")
+            await callback_query.answer("Paused / Resumed!")
         except Exception:
             try:
                 await calls.resume(chat_id)
