@@ -49,52 +49,75 @@ calls = PyTgCalls(user)
 SONG_FILE = "current_song.mp3"
 
 def download_audio_track(query: str):
-    """Download track locally using SoundCloud via yt-dlp (no bot blocks)"""
-    try:
-        if os.path.exists(SONG_FILE):
-            os.remove(SONG_FILE)
+    """Download track with automatic multi-source fallback to bypass DRM and blocks"""
+    if os.path.exists(SONG_FILE):
+        os.remove(SONG_FILE)
 
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'outtmpl': 'current_song',
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-            'quiet': True,
-            'no_warnings': True,
-            'noplaylist': True,
-        }
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'outtmpl': 'current_song',
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }],
+        'quiet': True,
+        'no_warnings': True,
+        'noplaylist': True,
+    }
 
-        # Use SoundCloud search extractor to completely avoid YouTube bot walls
-        search_query = f"scsearch1:{query}"
-        log.info("Downloading track from SoundCloud for: %s", query)
+    # List of sources to try in order (SoundCloud first, then YouTube fallback with client impersonation)
+    search_queries = [
+        f"scsearch1:{query}",
+        f"ytsearch1:{query}"
+    ]
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(search_query, download=True)
-            if 'entries' in info:
-                info = info['entries'][0]
-            title = info.get('title', query)
+    last_error = None
+    title = query
 
-        if not os.path.exists(SONG_FILE):
+    for search_query in search_queries:
+        try:
+            log.info("Trying search query: %s", search_query)
+            # If using YouTube fallback, apply client headers to avoid bot walls
+            current_opts = ydl_opts.copy()
+            if search_query.startswith("ytsearch1:"):
+                current_opts['extractor_args'] = {
+                    'youtube': {
+                        'player-client': ['android', 'web']
+                    }
+                }
+
+            with yt_dlp.YoutubeDL(current_opts) as ydl:
+                info = ydl.extract_info(search_query, download=True)
+                if 'entries' in info:
+                    info = info['entries'][0]
+                title = info.get('title', query)
+
+            if os.path.exists(SONG_FILE):
+                break
+            
+            # Check for other extensions before conversion rename
             for f in os.listdir('.'):
                 if f.startswith('current_song.'):
                     os.rename(f, SONG_FILE)
                     break
 
-        if not os.path.exists(SONG_FILE):
-            raise ValueError("Failed to save audio file locally.")
+            if os.path.exists(SONG_FILE):
+                break
+        except Exception as exc:
+            last_error = exc
+            log.warning("Source %s failed: %s", search_query, exc)
+            continue
 
-        return SONG_FILE, title
-    except Exception as exc:
-        log.error("Download failed: %s", exc)
-        raise ValueError(f"Could not download song: {str(exc)[:100]}")
+    if not os.path.exists(SONG_FILE):
+        raise ValueError(f"Could not download song: {str(last_error or 'Unknown error')[:100]}")
+
+    return SONG_FILE, title
 
 @bot.on_message(filters.command("start"))
 async def start_command(_, message):
     await message.reply_text(
-        "🎵 SoundCloud Music Bot is online!\n"
+        "🎵 Robust Music Bot is online!\n"
         "Use `/song [name]` to download and stream music smoothly."
     )
 
