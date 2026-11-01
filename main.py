@@ -49,7 +49,7 @@ calls = PyTgCalls(user)
 SONG_FILE = "current_song.mp3"
 
 def download_audio_track(query: str):
-    """Download track using SoundCloud and Archive.org to fully avoid YouTube"""
+    """Download track using SoundCloud and safe extractors"""
     if os.path.exists(SONG_FILE):
         try:
             os.remove(SONG_FILE)
@@ -69,7 +69,6 @@ def download_audio_track(query: str):
         'noplaylist': True,
     }
 
-    # Only use non-YouTube extractors to avoid bot checks entirely
     search_queries = [
         f"scsearch1:{query}",
         f"ftymusic:{query}"
@@ -110,9 +109,12 @@ def download_audio_track(query: str):
 @bot.on_message(filters.command("start"))
 async def start_command(_, message):
     await message.reply_text(
-        "🎵 Secure Music Bot is online!\n\n"
-        "**Commands:**\n"
-        "• `/song [name]` - Download & play song\n"
+        "🎵 Hybrid Music Bot is online!\n\n"
+        "**Online Commands:**\n"
+        "• `/song [name]` - Search & play online song\n\n"
+        "**Offline / Direct Play Commands:**\n"
+        "• Upload an `.mp3` file to the group, then **reply to it** with `/play`\n\n"
+        "**Playback Controls:**\n"
         "• `/pause` - Pause music\n"
         "• `/resume` - Resume music\n"
         "• `/stop` or `/skip` - Stop & leave VC"
@@ -134,9 +136,41 @@ async def song_command(_, message):
             message.chat.id,
             MediaStream(file_path),
         )
-        await status.edit_text(f"🎶 Now playing: **{title}**")
+        await status.edit_text(f"🎶 Now playing online: **{title}**")
     except Exception as exc:
         log.exception("Playback failed")
+        if hasattr(status, 'edit_text'):
+            await status.edit_text(
+                f"Error: `{str(exc)[:150]}`\n\n"
+                "💡 *Tip:* If online search fails, upload the `.mp3` file in the chat and reply with `/play`!"
+            )
+
+@bot.on_message(filters.command("play") & filters.group)
+async def play_offline_command(_, message):
+    if not message.reply_to_message or not message.reply_to_message.audio:
+        await message.reply_text("Please **reply to an audio/mp3 file** with `/play` to play it offline!")
+        return
+
+    status = await message.reply_text("📥 Loading offline song...")
+    
+    try:
+        if os.path.exists(SONG_FILE):
+            try:
+                os.remove(SONG_FILE)
+            except Exception:
+                pass
+
+        file_path = await message.reply_to_message.download(file_name=SONG_FILE)
+        abs_path = os.path.abspath(file_path)
+        audio_name = message.reply_to_message.audio.file_name or "Custom Offline Track"
+
+        await calls.play(
+            message.chat.id,
+            MediaStream(abs_path),
+        )
+        await status.edit_text(f"🎶 Now playing offline file: **{audio_name}**")
+    except Exception as exc:
+        log.exception("Offline playback failed")
         if hasattr(status, 'edit_text'):
             await status.edit_text(f"Error: `{str(exc)[:200]}`")
 
