@@ -202,20 +202,37 @@ async def stream_end_handler(client, update: Update):
                 QUEUES[chat_id].append(item)
             await play_next(chat_id)
 
-@bot.on_message(filters.command("start"))
+@bot.on_message(filters.command("start") & filters.private)
 async def start_command(_, message):
-    await message.reply_text(
-        "🎵 Pro Interactive Music Bot is Online!\n\n"
-        "**Commands:**\n"
-        "• `/song [name]` - Search & stream online song with thumbnail\n"
-        "• Reply to `.mp3` with `/play` - Stream offline track\n"
-        "• `/queue` - View song queue\n"
-        "• `/shuffle` - Randomize playlist queue\n"
-        "• `/loop` - Toggle loop / repeat mode\n"
-        "• `/volume [1-200]` - Adjust streaming audio volume\n"
-        "• `/skip` or `/next` - Skip to next song\n"
-        "• `/stop` - Stop & clear queue"
+    welcome_caption = (
+        f"✨ **HeY {message.from_user.mention} !**\n\n"
+        f"🔘 **THIS IS `RUBI X MUSIC` 🎵 !**\n\n"
+        f"▶️ **A FAST & POWERFUL TELEGRAM MUSIC PLAYER BOT WITH SOME AWESOME FEATURES.**\n\n"
+        f"🔘 **CLICK ON THE HELP BUTTON TO GET INFORMATION ABOUT MY MODULES AND COMMANDS.**"
     )
+    
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ ADD ME IN YOUR GROUP ➕", url=f"https://t.me/{message._client.me.username}?startgroup=true")],
+        [InlineKeyboardButton("🛠 HELP COMMANDS", callback_data="cb_help")],
+        [
+            InlineKeyboardButton("🌙 OWNER", url="https://t.me/Akhil_Yadav"), # Update with your username link
+            InlineKeyboardButton("📢 UPDATES", url="https://t.me/ModulesPOCO75")
+        ],
+        [InlineKeyboardButton("💬 SUPPORT", url="https://t.me/warm_discussion")],
+        [InlineKeyboardButton("💻 SOURCE CODE", url="https://github.com/")]
+    ])
+
+    try:
+        await message.reply_photo(
+            photo="https://envs.sh/X-a.jpg", 
+            caption=welcome_caption,
+            reply_markup=keyboard
+        )
+    except Exception:
+        await message.reply_text(
+            text=welcome_caption,
+            reply_markup=keyboard
+        )
 
 @bot.on_message(filters.command("song") & filters.group)
 async def song_command(_, message):
@@ -382,7 +399,7 @@ async def callback_handler(_, callback_query):
     elif data == "cb_pause_resume":
         try:
             await calls.pause(chat_id)
-            await callback_query.answer("Paused / Resumed!")
+            await callback_query.answer("Paused!")
         except Exception:
             try:
                 await calls.resume(chat_id)
@@ -406,6 +423,11 @@ async def callback_handler(_, callback_query):
             await callback_query.answer("Queue shuffled!")
         else:
             await callback_query.answer("Not enough songs to shuffle!", show_alert=True)
+    elif data == "cb_help":
+        await callback_query.answer(
+            "Commands:\n• /song [name] - Play online\n• /play - Play offline (reply to audio)\n• /queue - View list\n• /skip - Next track",
+            show_alert=True
+        )
 
 async def main():
     await bot.start()
