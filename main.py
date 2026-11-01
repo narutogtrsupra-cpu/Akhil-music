@@ -218,12 +218,11 @@ async def start_command(_, message):
             InlineKeyboardButton("🌙 OWNER", url="https://t.me/NGSAKHIL"),
             InlineKeyboardButton("📢 UPDATES", url="https://t.me/chilkamut")
         ],
-        [InlineKeyboardButton("💬 SUPPORT", url="https://t.me/warm_discussion")],
+        [InlineKeyboardButton("💬 SUPPORT", url="https://t.me/chilkamut")],
         [InlineKeyboardButton("💻 SOURCE CODE", url="https://github.com/")]
     ])
 
     try:
-        # Using a direct image link representing your aesthetic photo upload
         await message.reply_photo(
             photo="https://envs.sh/X-a.jpg", 
             caption=welcome_caption,
