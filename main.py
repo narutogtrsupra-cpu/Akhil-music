@@ -111,7 +111,7 @@ def download_audio_track(query: str, index: int = 0):
 
 async def play_next(chat_id, message_context=None):
     if chat_id in QUEUES and len(QUEUES[chat_id]) > 0:
-        file_path, title = QUEUES[chat_id].pop(0)
+        file_path, title = QUEUES[chat_id][0]  # Peek current
         try:
             await calls.play(
                 chat_id,
@@ -121,6 +121,8 @@ async def play_next(chat_id, message_context=None):
                 await message_context.reply_text(f"🎶 Now playing: **{title}**")
         except Exception as exc:
             log.error(f"Playback error: {exc}")
+            if chat_id in QUEUES and len(QUEUES[chat_id]) > 0:
+                QUEUES[chat_id].pop(0)
             await play_next(chat_id, message_context)
     else:
         try:
@@ -134,6 +136,8 @@ async def stream_end_handler(client, update: Update):
     from pytgcalls.types import StreamAudioEnded
     if isinstance(update, StreamAudioEnded):
         chat_id = update.chat_id
+        if chat_id in QUEUES and len(QUEUES[chat_id]) > 0:
+            QUEUES[chat_id].pop(0)  # Remove finished song
         await play_next(chat_id)
 
 @bot.on_message(filters.command("start"))
@@ -159,25 +163,27 @@ async def song_command(_, message):
     status = await message.reply_text(f"📥 Processing `{query}`...")
     
     try:
-        index = len(QUEUES.get(message.chat.id, [])) + 1
-        file_path, title = await asyncio.to_thread(download_audio_track, query, index)
-        
         if message.chat.id not in QUEUES:
             QUEUES[message.chat.id] = []
-
-        is_playing = False
+            
+        index = len(QUEUES[message.chat.id]) + 1
+        file_path, title = await asyncio.to_thread(download_audio_track, query, index)
+        
+        is_playing = len(QUEUES[message.chat.id]) > 0
         try:
-            if message.chat.id in calls._call_client:
-                is_playing = True
+            current_call = calls.get_call(message.chat.id)
+            if not current_call:
+                is_playing = False
         except Exception:
-            pass
+            is_playing = len(QUEUES[message.chat.id]) > 0
 
-        if not is_playing and len(QUEUES[message.chat.id]) == 0:
-            QUEUES[message.chat.id].append((file_path, title))
+        QUEUES[message.chat.id].append((file_path, title))
+
+        if not is_playing or len(QUEUES[message.chat.id]) == 1:
+            # If nothing was playing, start it immediately
             await play_next(message.chat.id, status)
         else:
-            QUEUES[message.chat.id].append((file_path, title))
-            await status.edit_text(f"➕ Added to Queue: **{title}** (Position: {len(QUEUES[message.chat.id])})")
+            await status.edit_text(f"➕ Added to Queue: **{title}** (Position: {len(QUEUES[message.chat.id]) - 1})")
     except Exception as exc:
         log.exception("Playback failed")
         if hasattr(status, 'edit_text'):
@@ -195,28 +201,29 @@ async def play_offline_command(_, message):
     status = await message.reply_text("📥 Loading offline song to queue...")
     
     try:
-        index = len(QUEUES.get(message.chat.id, [])) + 1
+        if message.chat.id not in QUEUES:
+            QUEUES[message.chat.id] = []
+            
+        index = len(QUEUES[message.chat.id]) + 1
         song_file = f"offline_{index}.mp3"
         file_path = await message.reply_to_message.download(file_name=song_file)
         abs_path = os.path.abspath(file_path)
         audio_name = message.reply_to_message.audio.file_name or "Custom Offline Track"
 
-        if message.chat.id not in QUEUES:
-            QUEUES[message.chat.id] = []
-
-        is_playing = False
+        is_playing = len(QUEUES[message.chat.id]) > 0
         try:
-            if message.chat.id in calls._call_client:
-                is_playing = True
+            current_call = calls.get_call(message.chat.id)
+            if not current_call:
+                is_playing = False
         except Exception:
-            pass
+            is_playing = len(QUEUES[message.chat.id]) > 0
 
-        if not is_playing and len(QUEUES[message.chat.id]) == 0:
-            QUEUES[message.chat.id].append((abs_path, audio_name))
+        QUEUES[message.chat.id].append((abs_path, audio_name))
+
+        if not is_playing or len(QUEUES[message.chat.id]) == 1:
             await play_next(message.chat.id, status)
         else:
-            QUEUES[message.chat.id].append((abs_path, audio_name))
-            await status.edit_text(f"➕ Added offline track to Queue: **{audio_name}** (Position: {len(QUEUES[message.chat.id])})")
+            await status.edit_text(f"➕ Added offline track to Queue: **{audio_name}** (Position: {len(QUEUES[message.chat.id]) - 1})")
     except Exception as exc:
         log.exception("Offline playback failed")
         if hasattr(status, 'edit_text'):
@@ -230,8 +237,11 @@ async def queue_command(_, message):
         return
     
     text = "🎵 **Current Music Queue:**\n\n"
-    for i, (_, title) in enumerate(QUEUES[chat_id], 1):
-        text += f"{i}. {title}\n"
+    for i, (_, title) in enumerate(QUEUES[chat_id]):
+        if i == 0:
+            text += f"▶️ **Now Playing:** {title}\n\n"
+        else:
+            text += f"{i}. {title}\n"
     await message.reply_text(text)
 
 @bot.on_message(filters.command("pause") & filters.group)
@@ -254,6 +264,8 @@ async def resume_command(_, message):
 async def skip_command(_, message):
     try:
         await message.reply_text("⏭ Skipping current song...")
+        if message.chat.id in QUEUES and len(QUEUES[message.chat.id]) > 0:
+            QUEUES[message.chat.id].pop(0)
         await play_next(message.chat.id)
     except Exception as exc:
         await message.reply_text(f"Error: {exc}")
