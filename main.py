@@ -206,7 +206,7 @@ async def stream_end_handler(client, update: Update):
 async def start_command(_, message):
     welcome_caption = (
         f"✨ **HeY {message.from_user.mention} !**\n\n"
-        f"🔘 **THIS IS `RUBI X MUSIC` 🎵 !**\n\n"
+        f"🔘 **THIS IS `NGS-MUSIC-BOT` 🎵 !**\n\n"
         f"▶️ **A FAST & POWERFUL TELEGRAM MUSIC PLAYER BOT WITH SOME AWESOME FEATURES.**\n\n"
         f"🔘 **CLICK ON THE HELP BUTTON TO GET INFORMATION ABOUT MY MODULES AND COMMANDS.**"
     )
@@ -215,14 +215,15 @@ async def start_command(_, message):
         [InlineKeyboardButton("➕ ADD ME IN YOUR GROUP ➕", url=f"https://t.me/{message._client.me.username}?startgroup=true")],
         [InlineKeyboardButton("🛠 HELP COMMANDS", callback_data="cb_help")],
         [
-            InlineKeyboardButton("🌙 OWNER", url="https://t.me/Akhil_Yadav"), # Update with your username link
-            InlineKeyboardButton("📢 UPDATES", url="https://t.me/ModulesPOCO75")
+            InlineKeyboardButton("🌙 OWNER", url="https://t.me/NGSAKHIL"),
+            InlineKeyboardButton("📢 UPDATES", url="https://t.me/chilkamut")
         ],
         [InlineKeyboardButton("💬 SUPPORT", url="https://t.me/warm_discussion")],
         [InlineKeyboardButton("💻 SOURCE CODE", url="https://github.com/")]
     ])
 
     try:
+        # Using a direct image link representing your aesthetic photo upload
         await message.reply_photo(
             photo="https://envs.sh/X-a.jpg", 
             caption=welcome_caption,
@@ -433,7 +434,7 @@ async def main():
     await bot.start()
     await user.start()
     await calls.start()
-    log.info("Pro Music bot started successfully")
+    log.info("NGS-MUSIC-BOT started successfully")
     try:
         await asyncio.Event().wait()
     finally:
