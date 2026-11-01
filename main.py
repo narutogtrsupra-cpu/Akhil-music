@@ -224,7 +224,7 @@ async def start_command(_, message):
 
     try:
         await message.reply_photo(
-            photo="https://envs.sh/X-a.jpg", 
+            photo="start_img.jpg", 
             caption=welcome_caption,
             reply_markup=keyboard
         )
