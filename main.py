@@ -15,6 +15,7 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pytgcalls import PyTgCalls
 from pytgcalls.types import MediaStream
 from pytgcalls.types.update import Update
+from pytgcalls.types import StreamAudioEnded
 import yt_dlp
 
 logging.basicConfig(level=logging.INFO)
@@ -61,7 +62,6 @@ def cleanup_memory():
 
 def download_audio_track(query: str, index: int = 0):
     song_file = f"song_{index}.mp3"
-    thumb_file = f"thumb_{index}.jpg"
     
     ydl_opts = {
         'format': 'bestaudio/best',
@@ -108,7 +108,6 @@ def download_audio_track(query: str, index: int = 0):
     if not os.path.exists(song_file):
         raise ValueError("Could not download song track.")
 
-    # Check for thumbnail
     for ext in ['.jpg', '.webp', '.png']:
         if os.path.exists(f"song_{index}{ext}"):
             thumb_path = f"song_{index}{ext}"
@@ -117,7 +116,6 @@ def download_audio_track(query: str, index: int = 0):
     return os.path.abspath(song_file), title, duration_str, thumb_path
 
 def get_control_markup(is_paused=False):
-    loop_status = "🔂 ON"
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("⏮", callback_data="cb_skip"),
@@ -132,7 +130,6 @@ def get_control_markup(is_paused=False):
     ])
 
 async def auto_leave_timer(chat_id):
-    """Auto leave VC if empty/inactive for 3 minutes"""
     try:
         await asyncio.sleep(180)
         if chat_id in QUEUES and len(QUEUES[chat_id]) == 0:
@@ -144,16 +141,15 @@ async def auto_leave_timer(chat_id):
     except asyncio.CancelledError:
         pass
 
-async def play_next(chat_id, client=None):
+async def play_next(chat_id):
     if chat_id in IDLE_TASKS:
         IDLE_TASKS[chat_id].cancel()
 
     if chat_id in QUEUES and len(QUEUES[chat_id]) > 0:
         current = QUEUES[chat_id][0]
         
-        # Handle loop mode
-        if LOOP_MODES.get(chat_id, False) and client:
-            # Duplicate current track to end of queue for repeating loop behavior
+        # Handle loop mode: push to end of list if loop enabled
+        if LOOP_MODES.get(chat_id, False):
             QUEUES[chat_id].append(current)
 
         try:
@@ -163,7 +159,6 @@ async def play_next(chat_id, client=None):
                 MediaStream(current['file_path']),
             )
             
-            # Send UI Banner with Thumbnail if available
             caption = (
                 f"▶️ **STARTED STREAMING**\n\n"
                 f"✨ **Title** : {current['title']}\n"
@@ -190,7 +185,7 @@ async def play_next(chat_id, client=None):
             log.error(f"Playback error: {exc}")
             if len(QUEUES[chat_id]) > 0:
                 QUEUES[chat_id].pop(0)
-            await play_next(chat_id, client)
+            await play_next(chat_id)
     else:
         try:
             await calls.leave_group_call(chat_id)
@@ -201,12 +196,17 @@ async def play_next(chat_id, client=None):
 
 @calls.on_update()
 async def stream_end_handler(client, update: Update):
-    from pytgcalls.types import StreamAudioEnded
     if isinstance(update, StreamAudioEnded):
         chat_id = update.chat_id
         if chat_id in QUEUES and len(QUEUES[chat_id]) > 0:
-            QUEUES[chat_id].pop(0)
-        await play_next(chat_id, bot)
+            # If loop is not enabled, pop the finished song
+            if not LOOP_MODES.get(chat_id, False):
+                QUEUES[chat_id].pop(0)
+            else:
+                # If loop is enabled, pop and push to back handled in play_next, so just rotate here
+                item = QUEUES[chat_id].pop(0)
+                QUEUES[chat_id].append(item)
+        await play_next(chat_id)
 
 @bot.on_message(filters.command("start"))
 async def start_command(_, message):
@@ -253,7 +253,7 @@ async def song_command(_, message):
 
         if not is_playing or len(QUEUES[message.chat.id]) == 1:
             await status.delete()
-            await play_next(message.chat.id, bot)
+            await play_next(message.chat.id)
         else:
             await status.edit_text(f"➕ Added to Queue: **{title}** (Position: {len(QUEUES[message.chat.id]) - 1})")
     except Exception as exc:
@@ -292,7 +292,7 @@ async def play_offline_command(_, message):
 
         if not is_playing or len(QUEUES[message.chat.id]) == 1:
             await status.delete()
-            await play_next(message.chat.id, bot)
+            await play_next(message.chat.id)
         else:
             await status.edit_text(f"➕ Added offline track to Queue: **{audio_name}** (Position: {len(QUEUES[message.chat.id]) - 1})")
     except Exception as exc:
@@ -358,7 +358,7 @@ async def skip_command(_, message):
         await message.reply_text("⏭ Skipping current song...")
         if message.chat.id in QUEUES and len(QUEUES[message.chat.id]) > 0:
             QUEUES[message.chat.id].pop(0)
-        await play_next(message.chat.id, bot)
+        await play_next(message.chat.id)
     except Exception as exc:
         await message.reply_text(f"Error: {exc}")
 
@@ -375,7 +375,6 @@ async def stop_command(_, message):
     except Exception as exc:
         await message.reply_text(f"Error: {exc}")
 
-# --- INTERACTIVE BUTTON CONTROLLER ---
 @bot.on_callback_query()
 async def callback_handler(_, callback_query):
     data = callback_query.data
@@ -384,16 +383,18 @@ async def callback_handler(_, callback_query):
     if data == "cb_skip":
         if chat_id in QUEUES and len(QUEUES[chat_id]) > 0:
             QUEUES[chat_id].pop(0)
-        await play_next(chat_id, bot)
+        await play_next(chat_id)
         await callback_query.answer("Skipped to next song!")
     elif data == "cb_pause_resume":
         try:
-            # Simple toggle state check
             await calls.pause(chat_id)
-            await callback_query.answer("Paused / Resumed!")
+            await callback_query.answer("Paused!")
         except Exception:
-            await calls.resume(chat_id)
-            await callback_query.answer("Resumed!")
+            try:
+                await calls.resume(chat_id)
+                await callback_query.answer("Resumed!")
+            except Exception:
+                await callback_query.answer("Action failed.")
     elif data == "cb_stop":
         if chat_id in QUEUES:
             QUEUES[chat_id].clear()
