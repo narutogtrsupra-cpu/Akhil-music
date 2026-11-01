@@ -12,7 +12,6 @@ static_ffmpeg.add_paths()
 from pyrogram import Client, filters
 from pytgcalls import PyTgCalls
 from pytgcalls.types import MediaStream
-from pytgcalls.types.input_stream import AudioPiped
 import yt_dlp
 
 logging.basicConfig(level=logging.INFO)
@@ -163,10 +162,8 @@ async def song_command(_, message):
         if message.chat.id not in QUEUES:
             QUEUES[message.chat.id] = []
 
-        # Check if anything is currently playing
         is_playing = False
         try:
-            # If call is active and playing
             if message.chat.id in calls._call_client:
                 is_playing = True
         except Exception:
