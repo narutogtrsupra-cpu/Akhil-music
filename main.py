@@ -20,7 +20,7 @@ import yt_dlp
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("musicbot")
 
-# --- RENDER WEB SERVICE PORT BINDER (KEEP ALIVE) ---
+# --- WEB SERVICE PORT BINDER (KEEP ALIVE) ---
 app = Flask('')
 
 @app.route('/')
@@ -28,7 +28,7 @@ def home():
     return "Bot is alive and running!"
 
 def run_flask():
-    port = int(os.environ.get("PORT", 10000))
+    port = int(os.environ.get("PORT", 7860))
     app.run(host='0.0.0.0', port=port)
 
 def keep_alive():
@@ -37,7 +37,7 @@ def keep_alive():
     t.start()
 
 keep_alive()
-# --------------------------------------------------
+# ---------------------------------------------
 
 API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
@@ -178,7 +178,7 @@ async def play_next(chat_id):
                 )
         except Exception as exc:
             log.error(f"Playback error: {exc}")
-            if len(QUEUES[chat_id]) > 0:
+            if chat_id in QUEUES and len(QUEUES[chat_id]) > 0:
                 QUEUES[chat_id].pop(0)
             await play_next(chat_id)
     else:
@@ -192,7 +192,7 @@ async def play_next(chat_id):
 @calls.on_update()
 async def stream_end_handler(client, update: Update):
     update_str = str(type(update))
-    if "Ended" in update_str or "Finished" in update_str or "Update" in update_str:
+    if "Ended" in update_str or "Finished" in update_str or "Update" in update_str or "Stream" in update_str:
         chat_id = getattr(update, "chat_id", None)
         if chat_id and chat_id in QUEUES and len(QUEUES[chat_id]) > 0:
             if not LOOP_MODES.get(chat_id, False):
