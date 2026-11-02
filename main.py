@@ -247,8 +247,7 @@ async def song_command(_, message):
         if message.chat.id not in QUEUES:
             QUEUES[message.chat.id] = []
             
-        index = len(QUEUES[message.chat.id]) + 1
-        file_path, title, duration, thumb = await asyncio.to_thread(download_audio_track, query, index)
+        file_path, title, duration, thumb = await asyncio.to_thread(download_audio_track, query, len(QUEUES[message.chat.id]) + 1)
         
         user_name = message.from_user.mention if message.from_user else "Admin"
         song_data = {
@@ -259,14 +258,15 @@ async def song_command(_, message):
             'user': user_name
         }
 
-        is_playing = len(QUEUES[message.chat.id]) > 0
+        is_already_playing = len(QUEUES[message.chat.id]) > 0
         QUEUES[message.chat.id].append(song_data)
 
-        if not is_playing or len(QUEUES[message.chat.id]) == 1:
+        if not is_already_playing or len(QUEUES[message.chat.id]) == 1:
             await status.delete()
             await play_next(message.chat.id)
         else:
-            await status.edit_text(f"➕ Added to Queue: **{title}** (Position: {len(QUEUES[message.chat.id]) - 1})")
+            position = len(QUEUES[message.chat.id]) - 1
+            await status.edit_text(f"➕ **Added to Queue:**\n✨ **{title}**\n📍 **Position:** `{position}`")
     except Exception as exc:
         log.exception("Playback failed")
         if hasattr(status, 'edit_text'):
@@ -298,14 +298,15 @@ async def play_offline_command(_, message):
             'user': user_name
         }
 
-        is_playing = len(QUEUES[message.chat.id]) > 0
+        is_already_playing = len(QUEUES[message.chat.id]) > 0
         QUEUES[message.chat.id].append(song_data)
 
-        if not is_playing or len(QUEUES[message.chat.id]) == 1:
+        if not is_already_playing or len(QUEUES[message.chat.id]) == 1:
             await status.delete()
             await play_next(message.chat.id)
         else:
-            await status.edit_text(f"➕ Added offline track to Queue: **{audio_name}** (Position: {len(QUEUES[message.chat.id]) - 1})")
+            position = len(QUEUES[message.chat.id]) - 1
+            await status.edit_text(f"➕ **Added offline track to Queue:**\n✨ **{audio_name}**\n📍 **Position:** `{position}`")
     except Exception as exc:
         await status.edit_text(f"Error: {exc}")
 
