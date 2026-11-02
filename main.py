@@ -258,12 +258,10 @@ async def song_command(_, message):
             'user': user_name
         }
 
-        # Check if queue already has items active
-        is_queue_active = len(QUEUES[message.chat.id]) > 0
+        queue_len = len(QUEUES[message.chat.id])
         QUEUES[message.chat.id].append(song_data)
 
-        # Only trigger play_next if nothing was previously in the queue
-        if not is_queue_active:
+        if queue_len == 0:
             await status.delete()
             await play_next(message.chat.id)
         else:
@@ -300,10 +298,10 @@ async def play_offline_command(_, message):
             'user': user_name
         }
 
-        is_queue_active = len(QUEUES[message.chat.id]) > 0
+        queue_len = len(QUEUES[message.chat.id])
         QUEUES[message.chat.id].append(song_data)
 
-        if not is_queue_active:
+        if queue_len == 0:
             await status.delete()
             await play_next(message.chat.id)
         else:
