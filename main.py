@@ -4,6 +4,7 @@ import logging
 import tempfile
 import time
 import secrets
+import sys
 from pathlib import Path
 from html import escape
 from threading import Thread
@@ -14,7 +15,7 @@ import static_ffmpeg
 static_ffmpeg.add_paths()
 
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BotCommand
 from pytgcalls import PyTgCalls, filters as call_filters
 from pytgcalls.types import MediaStream, StreamEnded, Device
 from pyrogram.enums import ParseMode, ChatMemberStatus
@@ -47,6 +48,7 @@ API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
 BOT_TOKEN = os.environ.get("BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN")
 SESSION_STRING = os.environ["SESSION_STRING"]
+OWNER_ID = int(os.environ.get('OWNER_ID', '0'))
 if not BOT_TOKEN:
     raise RuntimeError("Set BOT_TOKEN in the host environment.")
 
@@ -84,6 +86,29 @@ def download_audio_track(query, direct=False):
                 for file in Path(directory).iterdir():
                     file.unlink()
         raise ValueError('Could not download song. Try another title or upload audio.')
+    except BaseException:
+        discard({'directory': directory})
+        raise
+
+
+def download_video_track(query, direct=False):
+    directory = tempfile.mkdtemp(prefix='music-')
+    try:
+        options = {'format': 'bestvideo[height<=720]+bestaudio/best[height<=720]/best',
+                   'merge_output_format': 'mp4', 'outtmpl': f'{directory}/video.%(ext)s',
+                   'quiet': True, 'no_warnings': True, 'noplaylist': True}
+        with yt_dlp.YoutubeDL(options) as ydl:
+            info = ydl.extract_info(query if direct else f'ytsearch1:{query}', download=True)
+            if info and 'entries' in info:
+                info = next((entry for entry in info['entries'] if entry), None)
+        files = [p for p in Path(directory).glob('video.*') if p.suffix.lower() in ('.mp4', '.mkv', '.webm')]
+        if not info or not files:
+            raise ValueError('Could not download video.')
+        url = info.get('webpage_url') or ''
+        return dict(file_path=str(files[0]), title=info.get('title') or query,
+                    duration=int(info.get('duration') or 0), directory=directory,
+                    source_url=url if url.startswith(('http://', 'https://')) else None,
+                    thumb=info.get('thumbnail'), video=True)
     except BaseException:
         discard({'directory': directory})
         raise
@@ -131,14 +156,32 @@ async def refresh(state):
         await state.card.edit_text(caption(state), **kwargs)
 
 
-def make_stream(path, offset=0):
-    return MediaStream(path, video_flags=MediaStream.Flags.IGNORE,
+def make_stream(track, offset=0):
+    return MediaStream(track['file_path'], video_flags=MediaStream.Flags.AUTO_DETECT if track.get('video') else MediaStream.Flags.IGNORE,
                        ffmpeg_parameters=f'-ss {int(offset)}' if offset else None)
 
 
 player = Player(calls, make_stream, announce, refresh)
 store = Storage(os.environ.get('MUSIC_DB_PATH', 'music.sqlite3'))
 searches = {}
+restart_requested = asyncio.Event()
+
+COMMANDS = [
+    ('start', '🚀 Start bot / main menu'), ('play', 'Play music'), ('vplay', 'Play video'),
+    ('pause', '⏸ Pause stream'), ('resume', '▶ Resume music'), ('skip', '⏭ Skip track'),
+    ('stop', '⏹ Stop playing'), ('end', '🛑 End session'), ('replay', '🔄 Replay track'),
+    ('queue', '📜 View queue'), ('shuffle', '🔀 Shuffle queue'), ('seek', '⏱ Seek time'),
+    ('loop', '🔁 Loop queue'), ('settings', '⚙ Bot settings'), ('autoplay', '✨ Autoplay toggle'),
+    ('auth', '🔐 Authorize user'), ('mode', '🎛 Control mode'), ('volume', '🔊 Set volume'),
+    ('reboot', '🔄 Reboot bot'), ('reload', '♻ Reload bot code'), ('restart', '⚡ Restart bot worker'),
+    ('speed', '🚀 Check ping'), ('clean', '🧹 Clear expired search cache'),
+]
+
+HELP = ('Start a group voice chat, then use /play <name or URL> or /vplay <name or URL>. '
+        'Reply to an audio or video with /play or /vplay. Controls: /pause /resume /skip '
+        '/stop /end /replay /queue /shuffle /seek <time> /loop /volume <1-200>. '
+        'Group admins: /settings, /autoplay on|off, /mode admin|all, /auth (reply or user ID). '
+        'More: /search /voteskip /playlist /remove /clearqueue /votethreshold.')
 
 
 def search_tracks(query):
@@ -172,7 +215,7 @@ async def is_admin(chat, user_id):
 
 async def may_control(chat, user_id):
     restricted, _ = store.settings(chat)
-    return not restricted or await is_admin(chat, user_id)
+    return not restricted or (user_id and store.is_authorized(chat, user_id)) or await is_admin(chat, user_id)
 
 
 def parse_seek(value):
@@ -193,7 +236,29 @@ async def stream_end_handler(client, update):
     state = player.chats[update.chat_id]
     current = state.queue[0] if state.queue else None
     if current is not None:
-        await player.advance(update.chat_id, natural=True, expected=current)
+        generation = state.generation
+        result = await player.advance(update.chat_id, natural=True, expected=current)
+        if (result == 'Queue finished.' and generation == state.generation and not state.queue
+                and not state.loop and store.autoplay_enabled(update.chat_id)):
+            asyncio.create_task(autoplay_next(update.chat_id, current, generation))
+
+
+async def autoplay_next(chat, previous, generation):
+    """Select one different search result; discard it if another request wins the race."""
+    try:
+        results = await asyncio.to_thread(search_tracks, previous['title'])
+        result = next((r for r in results if r['url'] != previous.get('source_url')
+                       and r['title'].casefold() != previous['title'].casefold()), None)
+        if not result or not store.autoplay_enabled(chat):
+            return
+        track = await asyncio.to_thread(download_audio_track, result['url'], True)
+        track['user'] = 'Autoplay'
+        if not store.autoplay_enabled(chat):
+            discard(track)
+            return
+        await player.enqueue(chat, track, generation, only_if_empty=True)
+    except Exception:
+        log.exception('Autoplay could not load a related track')
 
 
 @bot.on_message(filters.command("start") & filters.private)
@@ -228,14 +293,20 @@ async def start_command(_, message):
             reply_markup=keyboard
         )
 
+
+@bot.on_message(filters.command('start') & filters.group)
+async def group_start(_, message):
+    await message.reply_text(HELP)
+
 async def enqueue_item(chat, item, requester, generation):
     state = player.chats[chat]
     track = None
-    async with state.requests:
-        if generation != state.generation:
-            return None
-        try:
-            if item['kind'] == 'audio':
+    state.pending_requests += 1
+    try:
+        async with state.requests:
+            if generation != state.generation:
+                return None
+            if item['kind'] in ('audio', 'video_upload'):
                 directory = tempfile.mkdtemp(prefix='music-')
                 track = {'directory': directory}
                 path = await bot.download_media(item['file_id'], file_name=f'{directory}/audio')
@@ -244,21 +315,25 @@ async def enqueue_item(chat, item, requester, generation):
                 track.update(file_path=os.path.abspath(path), title=item['title'],
                              duration=item.get('duration', 0), thumb=None, audio_id=item['file_id'],
                              thumb_id=item.get('thumb_id'))
+                track['video'] = item['kind'] == 'video_upload'
                 if item.get('thumb_id'):
                     try:
                         track['thumb'] = await bot.download_media(item['thumb_id'], file_name=f'{directory}/thumb.jpg')
                     except Exception:
                         log.warning('Could not download thumbnail', exc_info=True)
             else:
-                track = await asyncio.to_thread(download_audio_track, item['query'], item['kind'] == 'url')
+                downloader = download_video_track if item.get('video') else download_audio_track
+                track = await asyncio.to_thread(downloader, item['query'], item['kind'] == 'url')
             track['user'] = requester
             position = await player.enqueue(chat, track, generation)
             track = None
             return position
-        except BaseException:
-            if track:
-                discard(track)
-            raise
+    except BaseException:
+        if track:
+            discard(track)
+        raise
+    finally:
+        state.pending_requests -= 1
 
 
 def position_message(position):
@@ -269,22 +344,25 @@ def position_message(position):
     return f'➕ Added to queue · position {position}' if position else 'Song started. Use /queue to see upcoming songs.'
 
 
-@bot.on_message(filters.command(['song', 'play']) & filters.group)
+@bot.on_message(filters.command(['song', 'play', 'vplay']) & filters.group)
 async def song_command(_, message):
-    offline = message.reply_to_message and message.reply_to_message.audio
+    video = message.command[0].lower() == 'vplay'
+    reply = message.reply_to_message
+    offline = reply and (reply.video if video else reply.audio)
     if len(message.command) < 2 and not offline:
-        await message.reply_text('Use /song <name> or reply to an audio file with /play.')
+        await message.reply_text('Use /play <name> or /vplay <name>, or reply to an audio or video file respectively.')
         return
     chat = message.chat.id
     generation = player.chats[chat].generation
     status = await message.reply_text('📥 Loading song…')
     if offline:
         thumbs = getattr(offline, 'thumbs', None) or []
-        item = dict(kind='audio', file_id=offline.file_id,
-                    title=offline.title or offline.file_name or 'Audio', duration=offline.duration or 0,
+        item = dict(kind='video_upload' if video else 'audio', file_id=offline.file_id,
+                    title=getattr(offline, 'title', None) or offline.file_name or ('Video' if video else 'Audio'), duration=offline.duration or 0,
                     thumb_id=thumbs[-1].file_id if thumbs else None)
     else:
-        item = dict(kind='query', query=' '.join(message.command[1:]))
+        query = ' '.join(message.command[1:])
+        item = dict(kind='url' if query.startswith(('https://', 'http://')) else 'query', query=query, video=video)
     try:
         result = await enqueue_item(chat, item, message.from_user.first_name if message.from_user else 'Admin', generation)
         await status.edit_text(position_message(result))
@@ -321,13 +399,14 @@ async def search_command(_, message):
         await status.edit_text('Search failed. Please try again.')
 
 
-@bot.on_message(filters.command(['stop', 'pause', 'resume', 'skip', 'next', 'restart',
+@bot.on_message(filters.command(['stop', 'end', 'pause', 'resume', 'skip', 'next', 'replay',
                                   'shuffle', 'loop', 'volume']) & filters.group)
 async def control_command(_, message):
     action = message.command[0].lower()
     action = 'skip' if action == 'next' else action
+    action = {'end': 'stop', 'replay': 'restart'}.get(action, action)
     if not await may_control(message.chat.id, message.from_user.id if message.from_user else None):
-        await message.reply_text('Only group admins can use playback controls in this group. Try /voteskip.')
+        await message.reply_text('Only group admins and authorized users can use playback controls in this group. Try /voteskip.')
         return
     volume = None
     if action == 'volume':
@@ -346,7 +425,7 @@ async def control_command(_, message):
 async def queue_control_command(_, message):
     chat = message.chat.id
     if not await may_control(chat, message.from_user.id if message.from_user else None):
-        await message.reply_text('Only group admins can use this control.')
+        await message.reply_text('Only group admins and authorized users can use this control.')
         return
     action = message.command[0].lower()
     try:
@@ -404,12 +483,75 @@ async def settings_command(_, message):
         await message.reply_text(f'Skip voting now requires {value} distinct user(s).')
 
 
+@bot.on_message(filters.command(['settings', 'autoplay', 'auth', 'unauth', 'mode']) & filters.group)
+async def feature_settings(_, message):
+    chat = message.chat.id
+    action = message.command[0].lower()
+    user_id = message.from_user.id if message.from_user else None
+    if action == 'settings':
+        restricted, threshold = store.settings(chat)
+        await message.reply_text(f"Control mode: {'admin and authorized' if restricted else 'all members'}\n"
+                                 f"Autoplay: {'ON' if store.autoplay_enabled(chat) else 'OFF'}\n"
+                                 f"Skip votes required: {threshold}\n"
+                                 'Admins: /mode admin|all, /autoplay on|off, /auth or /unauth by reply or user ID.')
+        return
+    if not await is_admin(chat, user_id):
+        await message.reply_text('Only a group admin can change these settings.')
+        return
+    args = message.command[1:]
+    if action in ('auth', 'unauth'):
+        target = message.reply_to_message.from_user if message.reply_to_message else None
+        if not args and target:
+            target_id = target.id
+        elif len(args) == 1 and args[0].isdigit() and int(args[0]) > 0:
+            target_id = int(args[0])
+        else:
+            await message.reply_text(f'Use /{action} <user ID> or reply to a user.')
+            return
+        store.authorize(chat, target_id, action == 'auth')
+        await message.reply_text(f"User {target_id} {'authorized' if action == 'auth' else 'removed from authorized users'}.")
+    elif action == 'autoplay':
+        if len(args) > 1 or (args and args[0].lower() not in ('on', 'off')):
+            await message.reply_text('Use /autoplay, /autoplay on or /autoplay off.')
+            return
+        enabled = args[0].lower() == 'on' if args else not store.autoplay_enabled(chat)
+        store.set_autoplay(chat, enabled)
+        await message.reply_text(f"Autoplay: {'ON' if enabled else 'OFF'}.")
+    else:
+        if len(args) != 1 or args[0].lower() not in ('admin', 'all'):
+            await message.reply_text('Use /mode admin or /mode all.')
+            return
+        store.set_setting(chat, admins_only=args[0].lower() == 'admin')
+        await message.reply_text('Control mode updated. Admin mode also permits authorized users.')
+
+
+@bot.on_message(filters.command(['speed', 'clean', 'reboot', 'reload', 'restart']))
+async def maintenance_command(_, message):
+    action = message.command[0].lower()
+    if action == 'speed':
+        started = time.monotonic()
+        status = await message.reply_text('Checking bot response…')
+        await status.edit_text(f'Bot response time: {(time.monotonic() - started) * 1000:.0f} ms.')
+        return
+    if not OWNER_ID or not message.from_user or message.from_user.id != OWNER_ID:
+        await message.reply_text('Only the configured bot owner can use this command.')
+        return
+    if action == 'clean':
+        expired = [key for key, value in searches.items() if value['expires'] <= time.monotonic()]
+        for key in expired:
+            del searches[key]
+        await message.reply_text(f'Cleared {len(expired)} expired search result(s).')
+        return
+    await message.reply_text('Restarting the bot worker and reloading its code. Active queues will be cleared.')
+    restart_requested.set()
+
+
 def saved_track(song):
     if song.get('audio_id'):
-        return dict(kind='audio', file_id=song['audio_id'], title=song['title'],
+        return dict(kind='video_upload' if song.get('video') else 'audio', file_id=song['audio_id'], title=song['title'],
                     duration=song['duration'], thumb_id=song.get('thumb_id'))
     if song.get('source_url'):
-        return dict(kind='url', query=song['source_url'], title=song['title'])
+        return dict(kind='url', query=song['source_url'], title=song['title'], video=song.get('video', False))
     raise ValueError('This song has no reusable source. Search for it again or upload an audio file.')
 
 
@@ -535,8 +677,8 @@ async def callback_handler(_, callback_query):
         await callback_query.answer(result, show_alert=True)
         return
     if callback_query.data == 'cb_help':
-        await callback_query.answer('Commands: /song <name>, /play (reply to audio), /pause, /resume, '
-                                    '/skip, /stop, /queue, /remove, /clearqueue, /seek, /search, /voteskip, /playlist, /admincontrols', show_alert=True)
+        await callback_query.answer()
+        await callback_query.message.reply_text(HELP)
         return
     action = callback_query.data.removeprefix('cb_')
     if action not in {'restart', 'toggle', 'stop', 'skip', 'shuffle', 'loop'}:
@@ -544,7 +686,7 @@ async def callback_handler(_, callback_query):
         return
     chat = callback_query.message.chat.id
     if not await may_control(chat, callback_query.from_user.id if callback_query.from_user else None):
-        await callback_query.answer('Only group admins can use these controls. You can vote to skip.', show_alert=True)
+        await callback_query.answer('Only admins and authorized users can use these controls. You can vote to skip.', show_alert=True)
         return
     try:
         result = await player.control(chat, action,
@@ -560,16 +702,17 @@ async def main():
     await bot.start()
     await user.start()
     await calls.start()
+    await bot.set_bot_commands([BotCommand(command, description) for command, description in COMMANDS])
     log.info('NGS-MUSIC-BOT started successfully')
     try:
-        await asyncio.Event().wait()
+        await restart_requested.wait()
     finally:
-        for state in player.chats.values():
-            if state.ticker:
-                state.ticker.cancel()
+        for chat in list(player.chats):
+            await player.control(chat, 'stop')
         await calls.stop()
         await user.stop()
         await bot.stop()
+    os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
 if __name__ == '__main__':

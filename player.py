@@ -29,6 +29,7 @@ class State:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     requests: asyncio.Lock = field(default_factory=asyncio.Lock)
     generation: int = 0
+    pending_requests: int = 0
     paused: bool = False
     loop: bool = False
     volume: int = 100
@@ -53,10 +54,10 @@ class Player:
         self.announce, self.refresh = announce, refresh
         self.chats = defaultdict(State)
 
-    async def enqueue(self, chat, track, generation):
+    async def enqueue(self, chat, track, generation, only_if_empty=False):
         state = self.chats[chat]
         async with state.lock:
-            if generation != state.generation:
+            if generation != state.generation or (only_if_empty and (state.queue or state.pending_requests)):
                 discard(track)
                 return None
             state.queue.append(track)
@@ -86,7 +87,7 @@ class Player:
         while state.queue:
             track = state.queue[0]
             try:
-                await self.calls.play(chat, self.stream(track['file_path']))
+                await self.calls.play(chat, self.stream(track))
             except Exception:
                 log.exception('Could not play %s', track['title'])
                 discard(state.queue.pop(0))
@@ -192,7 +193,7 @@ class Player:
             if seconds < 0 or seconds >= track['duration']:
                 return 'Choose a time before the end of the song.'
             was_paused = state.paused
-            await self.calls.play(chat, self.stream(track['file_path'], seconds))
+            await self.calls.play(chat, self.stream(track, seconds))
             if was_paused:
                 # Some stream replacements resume automatically.
                 await self.calls.pause(chat)
