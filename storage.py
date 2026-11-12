@@ -18,6 +18,13 @@ class Storage:
                     chat INTEGER NOT NULL, name TEXT NOT NULL, position INTEGER NOT NULL,
                     item TEXT NOT NULL, PRIMARY KEY (chat, name, position)
                 );
+                CREATE TABLE IF NOT EXISTS authorized_users (
+                    chat INTEGER NOT NULL, user_id INTEGER NOT NULL,
+                    PRIMARY KEY (chat, user_id)
+                );
+                CREATE TABLE IF NOT EXISTS autoplay (
+                    chat INTEGER PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0
+                );
             ''')
 
     @contextmanager
@@ -47,6 +54,26 @@ class Storage:
                 db.execute('UPDATE settings SET admins_only=? WHERE chat=?', (int(admins_only), chat))
             if votes_required is not None:
                 db.execute('UPDATE settings SET votes_required=? WHERE chat=?', (votes_required, chat))
+
+    def is_authorized(self, chat, user_id):
+        with self.connect() as db:
+            return db.execute('SELECT 1 FROM authorized_users WHERE chat=? AND user_id=?', (chat, user_id)).fetchone() is not None
+
+    def authorize(self, chat, user_id, enabled=True):
+        with self.connect() as db:
+            if enabled:
+                db.execute('INSERT OR IGNORE INTO authorized_users VALUES (?, ?)', (chat, user_id))
+            else:
+                db.execute('DELETE FROM authorized_users WHERE chat=? AND user_id=?', (chat, user_id))
+
+    def autoplay_enabled(self, chat):
+        with self.connect() as db:
+            row = db.execute('SELECT enabled FROM autoplay WHERE chat=?', (chat,)).fetchone()
+        return bool(row and row[0])
+
+    def set_autoplay(self, chat, enabled):
+        with self.connect() as db:
+            db.execute('INSERT OR REPLACE INTO autoplay VALUES (?, ?)', (chat, int(enabled)))
 
     def save(self, chat, name, item):
         name = self.name(name)
